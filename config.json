@@ -1,0 +1,5 @@
+{
+  "include_today": true,
+  "api_port": 5050,
+  "auto_shutdown_idle_minutes": 10
+}

@@ -1,0 +1,26 @@
+# Секрети — НІКОЛИ не комітити
+.env
+
+# Стан застосунку (генерується під час роботи)
+*.log
+sorter_log.txt
+sorter_checked.json
+sorter_trashed.json
+sorter_synced.json
+sorter_state.json
+volume_offsets.json
+screenshots/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+build/
+dist/
+
+# IDE
+.idea/
+.vscode/
+
+# Згенеровані іконки (можна перегенерувати: python tools/make_icon.py)
+# pc_control/assets/  — лишаємо в репо, бо потрібні для збірки

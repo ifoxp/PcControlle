@@ -1,0 +1,11 @@
+# PC Control — залежності
+flask
+python-dotenv
+pyautogui
+pynput
+pycaw
+comtypes
+opencv-python
+numpy
+requests
+PySide6

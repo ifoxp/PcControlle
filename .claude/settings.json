@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(\"/c/Users/ifoxp/AppData/Local/Programs/Python/Python313/python.exe\" -m pip install pycaw comtypes pynput)",
+      "Bash(\"/c/Users/ifoxp/AppData/Local/Programs/Python/Python313/python.exe\" -m pip install pycaw comtypes)",
+      "Bash(netstat -ano)",
+      "Bash(taskkill /PID 25304 /F)",
+      "Bash(cmd.exe /c \"taskkill /PID 25304 /F\")",
+      "Bash(cmd.exe /c \"taskkill /F /PID 25304 2>&1\")",
+      "Bash(cmd.exe /c \"wmic process where ProcessId=25304 get Name,ProcessId 2>&1\")",
+      "Bash(\"/c/Users/ifoxp/AppData/Local/Programs/Python/Python313/python.exe\" -m pip show pyinstaller)",
+      "Bash(\"/c/Users/ifoxp/AppData/Local/Programs/Python/Python313/python.exe\" -m pip show flask pyautogui pynput pycaw comtypes)",
+      "Bash(\"/c/Users/ifoxp/AppData/Local/Programs/Python/Python313/python.exe\" -c \"import flask, pyautogui, pynput, pycaw, comtypes; print\\(''all ok''\\)\")",
+      "Bash(\"/c/Users/ifoxp/AppData/Local/Programs/Python/Python313/python.exe\" -m pip install flask)",
+      "Bash(\"/c/Users/ifoxp/AppData/Local/Programs/Python/Python313/python.exe\" -c \"import flask; print\\(flask.__version__\\)\")",
+      "Bash(QT_API=pyside6 python -m PyInstaller \"PC Control.spec\" --noconfirm --clean)"
+    ]
+  }
+}
