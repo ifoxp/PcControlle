@@ -13,7 +13,11 @@
       "Bash(\"/c/Users/ifoxp/AppData/Local/Programs/Python/Python313/python.exe\" -c \"import flask, pyautogui, pynput, pycaw, comtypes; print\\(''all ok''\\)\")",
       "Bash(\"/c/Users/ifoxp/AppData/Local/Programs/Python/Python313/python.exe\" -m pip install flask)",
       "Bash(\"/c/Users/ifoxp/AppData/Local/Programs/Python/Python313/python.exe\" -c \"import flask; print\\(flask.__version__\\)\")",
-      "Bash(QT_API=pyside6 python -m PyInstaller \"PC Control.spec\" --noconfirm --clean)"
+      "Bash(QT_API=pyside6 python -m PyInstaller \"PC Control.spec\" --noconfirm --clean)",
+      "Bash(grep -iE '\\(^|/\\)\\\\.env$|\\\\.env$|token|secret|sorter_.*\\\\.json|volume_offsets')",
+      "Bash(git rm *)",
+      "Bash(git add *)",
+      "Bash(git commit -m '@ *)"
     ]
   }
 }

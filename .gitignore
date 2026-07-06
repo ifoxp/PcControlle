@@ -22,5 +22,18 @@ dist/
 .idea/
 .vscode/
 
+# Claude Code — локальні налаштування (дозволи конкретної машини)
+.claude/settings.local.json
+
+# TLS-сертифікати API (генеруються локально, приватний ключ)
+cert.pem
+key.pem
+
+# Реєстр парованих пристроїв (містить хеші токенів)
+devices.json
+
+# Аудит-лог безпеки
+security_audit.log
+
 # Згенеровані іконки (можна перегенерувати: python tools/make_icon.py)
 # pc_control/assets/  — лишаємо в репо, бо потрібні для збірки
