@@ -27,7 +27,25 @@ class PairingData:
 
 
 def parse_qr(raw: str) -> PairingData:
-    """Розбирає JSON з QR. Кидає ValueError, якщо формат не той."""
+    """
+    Розбирає дані парування. Приймає два формати:
+      1. JSON (вставлений вручну / скопійований);
+      2. deep-link URL pccontrol://pair?d=<base64-json> (зі скану камерою).
+    Кидає ValueError, якщо формат не той.
+    """
+    raw = (raw or "").strip()
+
+    # deep-link: pccontrol://pair?d=<base64>
+    if raw.startswith("pccontrol://"):
+        import base64
+        from urllib.parse import urlparse, parse_qs
+        try:
+            q = parse_qs(urlparse(raw).query)
+            b64 = q.get("d", [""])[0]
+            raw = base64.urlsafe_b64decode(b64.encode()).decode("utf-8")
+        except Exception as e:
+            raise ValueError("Пошкоджений код парування у посиланні.") from e
+
     try:
         data = json.loads(raw)
     except Exception as e:

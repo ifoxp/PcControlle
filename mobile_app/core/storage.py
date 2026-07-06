@@ -98,3 +98,29 @@ class Storage:
             if p["id"] == active_id:
                 return p
         return pcs[0] if pcs else None
+
+    # ------------------------------------------------------------ кеш маніфесту
+    def save_manifest(self, pc_id: str, manifest: dict) -> None:
+        """Зберігає останній маніфест ПК — щоб при запуску сітка була одразу."""
+        data = self._read()
+        data.setdefault("manifests", {})[pc_id] = manifest
+        self._write(data)
+
+    def load_manifest(self, pc_id: str) -> dict | None:
+        """Кешований маніфест ПК (None, якщо ще не тягнули)."""
+        return self._read().get("manifests", {}).get(pc_id)
+
+    # ------------------------------------------------------------ UI-налаштування
+    def get_settings(self) -> dict:
+        """Налаштування вигляду сітки (з дефолтами)."""
+        s = self._read().get("ui", {})
+        return {
+            "columns": int(s.get("columns", 4)),          # к-ть іконок у ширину
+            "align": s.get("align", "center"),            # top | center | bottom
+            "confirm_dangerous": bool(s.get("confirm_dangerous", True)),
+        }
+
+    def set_setting(self, key: str, value) -> None:
+        data = self._read()
+        data.setdefault("ui", {})[key] = value
+        self._write(data)

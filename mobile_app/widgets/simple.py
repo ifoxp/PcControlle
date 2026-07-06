@@ -40,8 +40,8 @@ def _fire(cmd: dict, ctx: WidgetContext, busy: dict, params: dict | None = None)
 
 def _run_with_confirm(cmd: dict, ctx: WidgetContext, busy: dict,
                       params: dict | None = None) -> None:
-    """Небезпечні — через підтвердження."""
-    if cmd.get("dangerous"):
+    """Небезпечні — через підтвердження (якщо увімкнено в налаштуваннях)."""
+    if cmd.get("dangerous") and getattr(ctx, "confirm_dangerous", True):
         confirm_dialog(
             ctx.page, cmd.get("title", "Дія"),
             "Виконати цю дію на ПК?",
@@ -81,7 +81,7 @@ def build_text_input_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
         )
 
         def submit(_):
-            ctx.page.close(sheet)
+            theme.dismiss(ctx.page)
             _run_with_confirm(cmd, ctx, busy, {field_name: field.value})
 
         sheet = ft.AlertDialog(
@@ -89,11 +89,11 @@ def build_text_input_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
             title=ft.Text(cmd.get("title", "Введення"), color=theme.TEXT),
             content=field,
             actions=[
-                ft.TextButton("Скасувати", on_click=lambda _: ctx.page.close(sheet)),
+                ft.TextButton("Скасувати", on_click=lambda _: theme.dismiss(ctx.page)),
                 ft.FilledButton("Виконати", on_click=submit),
             ],
         )
-        ctx.page.open(sheet)
+        theme.show(ctx.page, sheet)
 
     return grid_tile(cmd, open_input, busy_ref=busy)
 
@@ -107,7 +107,7 @@ def build_picker_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
 
     def open_picker():
         def choose(value):
-            ctx.page.close(sheet)
+            theme.dismiss(ctx.page)
             _run_with_confirm(cmd, ctx, busy, {field_name: value})
 
         items = [
@@ -121,9 +121,9 @@ def build_picker_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
             modal=True, bgcolor=theme.SURFACE,
             title=ft.Text(cmd.get("title", "Вибір"), color=theme.TEXT),
             content=ft.Column(items, tight=True, spacing=2),
-            actions=[ft.TextButton("Закрити", on_click=lambda _: ctx.page.close(sheet))],
+            actions=[ft.TextButton("Закрити", on_click=lambda _: theme.dismiss(ctx.page))],
         )
-        ctx.page.open(sheet)
+        theme.show(ctx.page, sheet)
 
     return grid_tile(cmd, open_picker, busy_ref=busy)
 

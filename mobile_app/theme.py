@@ -55,6 +55,28 @@ def apply(page: ft.Page) -> None:
     )
 
 
+def show(page, dialog) -> None:
+    """Показати діалог/снекбар (Flet 0.85: show_dialog замість page.open)."""
+    try:
+        page.show_dialog(dialog)
+    except Exception:
+        # запасний варіант через overlay
+        try:
+            page.overlay.append(dialog)
+            dialog.open = True
+            page.update()
+        except Exception:
+            pass
+
+
+def dismiss(page) -> None:
+    """Закрити поточний діалог (Flet 0.85: pop_dialog замість page.close)."""
+    try:
+        page.pop_dialog()
+    except Exception:
+        pass
+
+
 def card(content, **kwargs) -> ft.Container:
     """Стандартна картка."""
     return ft.Container(

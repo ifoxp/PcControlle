@@ -21,6 +21,7 @@ class WidgetContext:
     run_async: Callable            # run_async(fn) — виконати в потоці (щоб не блокувати UI)
     toast: Callable                # toast(msg, error=False) — снекбар
     open_sheet: Callable           # open_sheet(control) — модальний лист (для медіа/слайдера)
+    confirm_dangerous: bool = True # чи питати підтвердження перед небезпечними діями
 
 
 def icon_for(name: str) -> str:
@@ -34,9 +35,14 @@ def icon_for(name: str) -> str:
     return getattr(ft.Icons, key, ft.Icons.APPS)
 
 
-def run_in_thread(fn: Callable) -> None:
-    """Запускає fn у демон-потоці (для мережевих запитів, щоб UI не завмирав)."""
-    threading.Thread(target=fn, daemon=True).start()
+def run_in_thread(page: ft.Page, fn: Callable) -> None:
+    """
+    Виконує fn у фоновому потоці Flet. ВАЖЛИВО: використовуємо page.run_thread,
+    а не власний threading.Thread — інакше зміни UI з потоку (перемикання екрану,
+    page.update) у Flet 0.85 не застосовуються, і виглядає як «нескінченне
+    завантаження».
+    """
+    page.run_thread(fn)
 
 
 def grid_tile(cmd: dict, on_tap: Callable, *, busy_ref: dict | None = None) -> ft.Control:
@@ -97,7 +103,7 @@ def confirm_dialog(page: ft.Page, title: str, message: str,
                    on_yes: Callable) -> None:
     """Модальне підтвердження (для небезпечних дій)."""
     def close(_=None):
-        page.close(dlg)
+        theme.dismiss(page)
 
     def yes(_):
         close()
@@ -114,4 +120,4 @@ def confirm_dialog(page: ft.Page, title: str, message: str,
                             style=ft.ButtonStyle(bgcolor=theme.DANGER)),
         ],
     )
-    page.open(dlg)
+    theme.show(page, dlg)

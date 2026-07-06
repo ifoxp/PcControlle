@@ -1,12 +1,12 @@
 """
-Головний екран: сітка команд 4-в-ширину, побудована з /manifest.
+Головний екран: сітка команд, побудована з /manifest.
 
-  * Шапка: ім'я активного ПК + перемикач ПК + кнопка «Оновити» (перетягнути маніфест).
-  * Сітка: 4 іконки в ширину, кожна — плитка з widgets.build_tile().
-  * Pull-to-refresh кнопкою + індикатор зв'язку.
+  * При відкритті показує КЕШОВАНИЙ маніфест миттєво (без «оновлення»), а у фоні
+    тихо оновлює його з ПК.
+  * Кнопка «Оновити» примусово тягне свіжий маніфест.
+  * Вигляд (к-ть колонок, вирівнювання зверху/центр/знизу) — з налаштувань.
 
-Нічого не хардкодимо: набір плиток = те, що прийшло в маніфесті. Нова команда на
-ПК → «Оновити» → нова плитка.
+Нічого не хардкодимо: набір плиток = маніфест. Нова команда на ПК → з'являється.
 """
 
 from __future__ import annotations
@@ -26,27 +26,30 @@ class GridScreen(ft.Container):
         self.storage = storage
         self.on_manage_pcs = on_manage_pcs
         self.on_add_pc = on_add_pc
-        self._grid = ft.GridView(
-            runs_count=4, max_extent=110, child_aspect_ratio=1.0,
-            spacing=10, run_spacing=10, padding=14, expand=True,
-        )
-        self._status = ft.Text("", size=12, color=theme.TEXT_DIM)
-        self._build()
-        self.load_manifest()
+        self._align = "center"
 
-    # ------------------------------------------------------------ контекст віджетів
+        self._status = ft.Text("", size=12, color=theme.TEXT_DIM)
+        self._grid = ft.GridView(spacing=12, run_spacing=12, padding=14)
+        self._grid_wrap = ft.Column([self._grid], expand=True)
+        self._build()
+        self._apply_grid_config()
+        self._load_cached()          # миттєво з кешу
+        self.load_manifest()         # тихе оновлення у фоні
+
+    # ------------------------------------------------------------ контекст
     def _ctx(self) -> WidgetContext:
         pc = self.storage.get_active()
         return WidgetContext(
             page=self._pg,
             client=ApiClient(pc),
-            run_async=run_in_thread,
+            run_async=lambda fn: run_in_thread(self._pg, fn),
             toast=self._toast,
-            open_sheet=lambda c: self._pg.open(c),
+            open_sheet=lambda c: theme.show(self._pg, c),
+            confirm_dangerous=self.storage.get_settings()["confirm_dangerous"],
         )
 
     def _toast(self, msg: str, error: bool = False) -> None:
-        self._pg.open(ft.SnackBar(
+        theme.show(self._pg, ft.SnackBar(
             ft.Text(msg, color="white"),
             bgcolor=theme.DANGER if error else theme.SURFACE_HI,
         ))
@@ -56,53 +59,102 @@ class GridScreen(ft.Container):
         pc = self.storage.get_active()
         name = pc["name"] if pc else "—"
 
-        title = ft.Text(name, size=18, weight=ft.FontWeight.BOLD, color=theme.TEXT)
-        switch_btn = ft.IconButton(ft.Icons.DEVICES, icon_color=theme.TEXT_DIM,
-                                   tooltip="Мої ПК", on_click=lambda _: self.on_manage_pcs())
-        refresh_btn = ft.IconButton(ft.Icons.REFRESH, icon_color=theme.ACCENT,
-                                    tooltip="Оновити команди",
-                                    on_click=lambda _: self.load_manifest())
-        add_btn = ft.IconButton(ft.Icons.ADD_LINK, icon_color=theme.TEXT_DIM,
-                                tooltip="Підключити ПК", on_click=lambda _: self.on_add_pc())
-
         header = ft.Container(
-            content=ft.Row(
-                [ft.Column([title, self._status], spacing=1, expand=True),
-                 add_btn, switch_btn, refresh_btn],
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-            ),
-            padding=theme.pad_only(left=18, right=8, top=16, bottom=6),
+            content=ft.Row([
+                ft.Column([
+                    ft.Text(name, size=18, weight=ft.FontWeight.BOLD, color=theme.TEXT),
+                    self._status,
+                ], spacing=1, expand=True),
+                ft.IconButton(ft.Icons.REFRESH, icon_color=theme.ACCENT,
+                              tooltip="Оновити команди",
+                              on_click=lambda _: self.load_manifest(force=True)),
+            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+            padding=theme.pad_only(left=18, right=8, top=8, bottom=4),
         )
+        self.content = ft.Column([header, self._grid_wrap], spacing=0, expand=True)
 
-        self.content = ft.Column([header, self._grid], spacing=0, expand=True)
+    def _apply_grid_config(self) -> None:
+        s = self.storage.get_settings()
+        self._grid.runs_count = s["columns"]
+        self._align = s["align"]
+        # вирівнювання сітки в межах доступної висоти:
+        # top → сітка не розтягується (пружина знизу); center → пружини з обох боків;
+        # bottom → пружина зверху. Реалізуємо через expand у grid_wrap.
+        expand_grid = self._align == "top"   # top: сітка тягнеться зверху вниз
+        self._grid.expand = expand_grid
+        self._rebuild_wrap()
+
+    def _rebuild_wrap(self) -> None:
+        spacer_top = self._align in ("center", "bottom")
+        spacer_bot = self._align in ("center", "top")
+        controls = []
+        if spacer_top:
+            controls.append(ft.Container(expand=True))
+        controls.append(self._grid if self._align == "top" else
+                        ft.Container(content=self._grid))
+        if spacer_bot and self._align != "top":
+            controls.append(ft.Container(expand=True))
+        self._grid_wrap.controls = controls
+
+    def apply_settings(self) -> None:
+        """Перезастосувати налаштування вигляду (після зміни в Налаштуваннях)."""
+        self._apply_grid_config()
+        self._render_current()
+        self._pg.update()
 
     # ------------------------------------------------------------ дані
-    def load_manifest(self) -> None:
+    def _tiles_from(self, manifest: dict) -> list:
+        ctx = self._ctx()
+        return [build_tile(c, ctx) for c in manifest.get("commands", [])]
+
+    def _cached_manifest(self):
+        pc = self.storage.get_active()
+        return self.storage.load_manifest(pc["id"]) if pc else None
+
+    def _render_current(self) -> None:
+        m = self._cached_manifest()
+        if m:
+            self._grid.controls = self._tiles_from(m)
+
+    def _load_cached(self) -> None:
+        m = self._cached_manifest()
+        if m:
+            self._grid.controls = self._tiles_from(m)
+            self._status.value = f"{len(m.get('commands', []))} команд · з кешу"
+            self._status.color = theme.TEXT_DIM
+        else:
+            self._status.value = "Завантаження…"
+        self._pg.update()
+
+    def load_manifest(self, force: bool = False) -> None:
         pc = self.storage.get_active()
         if not pc:
             self.on_add_pc()
             return
-        self._status.value = "Оновлення…"
-        self._grid.controls = []
-        self._pg.update()
+        if force:
+            self._status.value = "Оновлення…"
+            self._pg.update()
 
         def work():
             try:
                 manifest = ApiClient(pc).manifest()
-                cmds = manifest.get("commands", [])
-                ctx = self._ctx()
-                tiles = [build_tile(c, ctx) for c in cmds]
-                self._grid.controls = tiles
-                self._status.value = f"{len(tiles)} команд · з'єднано"
+                self.storage.save_manifest(pc["id"], manifest)
+                self._grid.controls = self._tiles_from(manifest)
+                self._status.value = f"{len(manifest.get('commands', []))} команд · з'єднано"
                 self._status.color = theme.OK
             except Exception as e:
-                self._status.value = f"Немає зв'язку: {str(e)[:40]}"
-                self._status.color = theme.DANGER
+                if self._cached_manifest():
+                    self._status.value = "Офлайн · показано кеш"
+                    self._status.color = theme.WARN
+                else:
+                    self._status.value = f"Немає зв'язку: {str(e)[:40]}"
+                    self._status.color = theme.DANGER
             self._pg.update()
 
-        run_in_thread(work)
+        run_in_thread(self._pg, work)
 
     def refresh_pc(self) -> None:
-        """Викликати після зміни активного ПК."""
         self._build()
+        self._apply_grid_config()
+        self._load_cached()
         self.load_manifest()

@@ -23,6 +23,11 @@ path = "."
 [tool.flet.android]
 adaptive_icon_background = "#0f1116"
 
+# Deep-link: скан QR (pccontrol://pair?...) камерою відкриває цей додаток
+[tool.flet.deep_linking]
+scheme = "pccontrol"
+host = "pair"
+
 # Дозволи Android: зберігати медіа в Downloads, доступ до сховища.
 [tool.flet.android.permission]
 "android.permission.INTERNET" = true

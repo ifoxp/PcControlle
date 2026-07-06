@@ -23,16 +23,21 @@ from widgets.base import run_in_thread
 
 
 class PairScreen(ft.Container):
-    def __init__(self, page: ft.Page, storage, on_paired, on_cancel=None):
+    def __init__(self, page: ft.Page, storage, on_paired, on_cancel=None, prefill_code=""):
         super().__init__(expand=True, bgcolor=theme.BG)
         self._pg = page
         self.storage = storage
         self.on_paired = on_paired
         self.on_cancel = on_cancel
+        self._prefill = prefill_code or ""
         self._build()
+        # якщо прийшли зі скану камери (deep-link) — одразу парувати
+        if self._prefill:
+            self._code.value = self._prefill
+            self._pair_from_code(None)
 
     def _toast(self, msg: str, error: bool = False) -> None:
-        self._pg.open(ft.SnackBar(ft.Text(msg, color="white"),
+        theme.show(self._pg, ft.SnackBar(ft.Text(msg, color="white"),
                                    bgcolor=theme.DANGER if error else theme.SURFACE_HI))
 
     def _build(self) -> None:
@@ -79,15 +84,19 @@ class PairScreen(ft.Container):
         if self.on_cancel:
             cancel = [ft.TextButton("Назад", on_click=lambda _: self.on_cancel())]
 
-        self.content = ft.Container(
-            content=ft.Column(
-                [header, ft.Container(height=8),
-                 theme.card(ft.Column([self._name, self._code, paste_btn, self._progress],
-                                      spacing=12)),
-                 manual, *cancel],
-                spacing=14, scroll=ft.ScrollMode.AUTO,
+        # SafeArea — відступ від камери/статус-бару зверху
+        self.content = ft.SafeArea(
+            top=True, bottom=True, expand=True,
+            content=ft.Container(
+                content=ft.Column(
+                    [header, ft.Container(height=8),
+                     theme.card(ft.Column([self._name, self._code, paste_btn, self._progress],
+                                          spacing=12)),
+                     manual, *cancel],
+                    spacing=14, scroll=ft.ScrollMode.AUTO,
+                ),
+                padding=22, expand=True,
             ),
-            padding=22, expand=True,
         )
 
     # ------------------------------------------------------------ дії
@@ -114,7 +123,7 @@ class PairScreen(ft.Container):
                 self._progress.visible = False
                 self._pg.update()
 
-        run_in_thread(work)
+        run_in_thread(self._pg, work)
 
     def _pair_from_code(self, _):
         try:

@@ -61,9 +61,9 @@ def build_slider_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 tight=True, spacing=12, width=280,
             ),
-            actions=[ft.TextButton("Готово", on_click=lambda _: ctx.page.close(sheet))],
+            actions=[ft.TextButton("Готово", on_click=lambda _: theme.dismiss(ctx.page))],
         )
-        ctx.page.open(sheet)
+        theme.show(ctx.page, sheet)
 
         # підтягнути поточне значення
         def load_current():

@@ -102,7 +102,7 @@ def present_bytes(ctx: WidgetContext, data: bytes, *, kind: str, title: str) -> 
         _save_to_downloads(ctx, data, suffix)
 
     def close(_):
-        ctx.page.close(dlg)
+        theme.dismiss(ctx.page)
 
     actions = ft.Row(
         [
@@ -122,7 +122,7 @@ def present_bytes(ctx: WidgetContext, data: bytes, *, kind: str, title: str) -> 
         ),
         content_padding=0,
     )
-    ctx.page.open(dlg)
+    theme.show(ctx.page, dlg)
 
 
 def build_media_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
