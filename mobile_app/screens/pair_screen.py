@@ -31,10 +31,16 @@ class PairScreen(ft.Container):
         self.on_cancel = on_cancel
         self._prefill = prefill_code or ""
         self._build()
-        # якщо прийшли зі скану камери (deep-link) — одразу парувати
         if self._prefill:
             self._code.value = self._prefill
-            self._pair_from_code(None)
+
+    def did_mount(self):
+        # авто-парування зі скану камери — після монтування (щоб run_thread не крешив)
+        if self._prefill:
+            try:
+                self._pair_from_code(None)
+            except Exception:
+                pass
 
     def _toast(self, msg: str, error: bool = False) -> None:
         theme.show(self._pg, ft.SnackBar(ft.Text(msg, color="white"),

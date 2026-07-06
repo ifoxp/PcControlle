@@ -24,7 +24,13 @@ class StatusScreen(ft.Container):
         self.on_refresh = on_refresh
         self._conn = ft.Text("Перевірка…", size=13, color=theme.TEXT_DIM)
         self._build()
-        self.refresh()
+        # ping відкладаємо до did_mount (щоб run_thread не крешив до монтування)
+
+    def did_mount(self):
+        try:
+            self.refresh()
+        except Exception:
+            pass
 
     def _build(self) -> None:
         pc = self.storage.get_active()
@@ -80,6 +86,9 @@ class StatusScreen(ft.Container):
             ok = ApiClient(pc).ping()
             self._conn.value = "● З'єднано" if ok else "● Немає зв'язку"
             self._conn.color = theme.OK if ok else theme.DANGER
-            self._pg.update()
+            try:
+                self._pg.update()
+            except Exception:
+                pass
 
         run_in_thread(self._pg, work)

@@ -33,8 +33,16 @@ class GridScreen(ft.Container):
         self._grid_wrap = ft.Column([self._grid], expand=True)
         self._build()
         self._apply_grid_config()
-        self._load_cached()          # миттєво з кешу
-        self.load_manifest()         # тихе оновлення у фоні
+        # кеш можна показати одразу (без мережі/потоків)
+        self._load_cached_silent()
+
+    def did_mount(self):
+        # мережеві виклики — лише коли контрол уже на сторінці (інакше run_thread
+        # до готовності сесії кидає помилку → на Android це «сірий екран»)
+        try:
+            self.load_manifest()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------ контекст
     def _ctx(self) -> WidgetContext:
@@ -100,7 +108,7 @@ class GridScreen(ft.Container):
         """Перезастосувати налаштування вигляду (після зміни в Налаштуваннях)."""
         self._apply_grid_config()
         self._render_current()
-        self._pg.update()
+        self._safe_update()
 
     # ------------------------------------------------------------ дані
     def _tiles_from(self, manifest: dict) -> list:
@@ -116,7 +124,8 @@ class GridScreen(ft.Container):
         if m:
             self._grid.controls = self._tiles_from(m)
 
-    def _load_cached(self) -> None:
+    def _load_cached_silent(self) -> None:
+        """Заповнити сітку з кешу БЕЗ page.update (для __init__, до монтування)."""
         m = self._cached_manifest()
         if m:
             self._grid.controls = self._tiles_from(m)
@@ -124,7 +133,16 @@ class GridScreen(ft.Container):
             self._status.color = theme.TEXT_DIM
         else:
             self._status.value = "Завантаження…"
-        self._pg.update()
+
+    def _load_cached(self) -> None:
+        self._load_cached_silent()
+        self._safe_update()
+
+    def _safe_update(self) -> None:
+        try:
+            self._pg.update()
+        except Exception:
+            pass
 
     def load_manifest(self, force: bool = False) -> None:
         pc = self.storage.get_active()
@@ -133,7 +151,7 @@ class GridScreen(ft.Container):
             return
         if force:
             self._status.value = "Оновлення…"
-            self._pg.update()
+            self._safe_update()
 
         def work():
             try:
@@ -149,7 +167,7 @@ class GridScreen(ft.Container):
                 else:
                     self._status.value = f"Немає зв'язку: {str(e)[:40]}"
                     self._status.color = theme.DANGER
-            self._pg.update()
+            self._safe_update()
 
         run_in_thread(self._pg, work)
 

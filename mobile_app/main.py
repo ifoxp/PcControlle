@@ -28,50 +28,100 @@ from screens.status_screen import StatusScreen
 
 
 async def _resolve_data_dir(page: ft.Page) -> str:
+    """
+    Тека для стану. storage_paths.get_application_support_directory() на desktop
+    може ЗАВИСНУТИ назавжди (сервіс недоступний → await не повертається, і додаток
+    показує вічне «Working…»). Тому await з таймаутом + надійний fallback.
+    """
+    import asyncio
     import os
     try:
-        d = await page.storage_paths.get_application_support_directory()
+        d = await asyncio.wait_for(
+            page.storage_paths.get_application_support_directory(), timeout=4.0
+        )
         if d:
             return d
     except Exception:
         pass
-    return os.path.join(os.path.expanduser("~"), ".pc_control")
+    # fallback: тимчасова тека ОС (завжди доступна на запис)
+    import tempfile
+    base = os.environ.get("HOME") or os.path.expanduser("~") or tempfile.gettempdir()
+    path = os.path.join(base, ".pc_control")
+    try:
+        os.makedirs(path, exist_ok=True)
+    except Exception:
+        path = os.path.join(tempfile.gettempdir(), "pc_control")
+        os.makedirs(path, exist_ok=True)
+    return path
 
 
 async def main(page: ft.Page):
-    theme.apply(page)
-    data_dir = await _resolve_data_dir(page)
-    storage = Storage(data_dir)
+    # Куленепробивний старт: будь-яка помилка ініціалізації показується на екрані,
+    # а не залишає німий сірий екран (як було на Android).
+    try:
+        theme.apply(page)
+    except Exception:
+        pass
+
+    def _show_error(msg: str):
+        import traceback
+        page.controls = [ft.Container(
+            content=ft.Column([
+                ft.Icon(ft.Icons.ERROR_OUTLINE, color="#ff5a5a", size=48),
+                ft.Text("Помилка запуску", size=20, color="#ffffff"),
+                ft.Text(msg, size=12, color="#cccccc", selectable=True),
+            ], scroll=ft.ScrollMode.AUTO, spacing=10),
+            padding=24, expand=True, bgcolor="#0f1116",
+        )]
+        try:
+            page.update()
+        except Exception:
+            pass
+
+    try:
+        data_dir = await _resolve_data_dir(page)
+        storage = Storage(data_dir)
+    except Exception as e:
+        import traceback
+        _show_error("Ініціалізація сховища:\n" + traceback.format_exc())
+        return
 
     def show(control: ft.Control):
         page.controls = [control]
         page.update()
 
-    # --- екран парування (opt. з передзаповненим кодом зі скану камери) ---
     def go_pair(prefill: str = ""):
         cancel = go_home if storage.has_any() else None
         show(PairScreen(page, storage, on_paired=lambda pc: go_home(),
                         on_cancel=cancel, prefill_code=prefill))
 
-    # deep-link: додаток відкрито через pccontrol://pair?d=... (скан камерою)
-    def _handle_deeplink(route: str):
-        if route and "pccontrol" in route and "pair" in route:
-            go_pair(prefill=route)
-
-    page.on_route_change = lambda e: _handle_deeplink(getattr(e, "route", "") or page.route)
-
-    # --- керування ПК ---
     def go_pcs():
         show(PcsScreen(page, storage, on_select=go_home, on_add=go_pair, on_back=go_home))
 
-    # --- головна оболонка з нижньою навігацією ---
     def go_home():
         if not storage.has_any():
             go_pair()
             return
         show(_MainShell(page, storage, on_add_pc=go_pair, on_manage_pcs=go_pcs))
 
-    go_home()
+    # deep-link: додаток відкрито через pccontrol://pair?d=... (скан камерою)
+    def _handle_deeplink(route: str):
+        try:
+            if route and "pccontrol" in route and "pair" in route:
+                go_pair(prefill=route)
+        except Exception:
+            pass
+
+    try:
+        page.on_route_change = lambda e: _handle_deeplink(getattr(e, "route", "") or page.route)
+    except Exception:
+        pass
+
+    try:
+        go_home()
+    except Exception:
+        import traceback
+        _show_error("Головний екран:\n" + traceback.format_exc())
 
 
 class _MainShell(ft.Column):
@@ -130,4 +180,5 @@ class _MainShell(ft.Column):
 
 
 if __name__ == "__main__":
-    ft.app(target=main)
+    # ft.run — актуальний API Flet 0.85 (ft.app deprecated, ламається на Android)
+    ft.run(main)
