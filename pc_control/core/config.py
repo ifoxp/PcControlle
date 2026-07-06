@@ -112,11 +112,27 @@ class SorterConfig:
 class ApiConfig:
     host: str = field(default_factory=lambda: _env("PC_API_HOST", "0.0.0.0"))
     port: int = 5050
+    # Білий IP/домен для сертифіката та QR-парування (телефон стукає сюди ззовні)
+    public_host: str = field(default_factory=lambda: _env("PC_PUBLIC_HOST", ""))
     # Дозволені схеми для /open_url
     allowed_url_schemes: tuple[str, ...] = ("http", "https")
-    # Простий rate-limit: макс. запитів з однієї IP за вікно
-    rate_limit_max: int = 30
+
+    # Rate-limit: макс. запитів з однієї IP за вікно
+    rate_limit_max: int = 60
     rate_limit_window_sec: int = 10
+
+    # HTTPS: якщо True — сервер підіймається на TLS (self-signed cert)
+    use_tls: bool = True
+
+    # Brute-force бан IP (ескалація: base * 2**strikes, до max)
+    ban_threshold: int = 8       # невдач авторизації за вікно → бан
+    ban_window_sec: int = 60     # вікно підрахунку невдач
+    ban_base_sec: int = 60       # базова тривалість бану (1 хв)
+    ban_max_sec: int = 3600      # стеля тривалості бану (1 год)
+
+    # Replay-захист (HMAC-підпис nonce+timestamp). Вимкнено, поки не готовий клієнт.
+    require_signature: bool = False
+    signature_max_skew_sec: int = 30  # допустимий розбіг годинника телефон↔ПК
 
 
 @dataclass
@@ -142,6 +158,12 @@ class AppConfig:
         """Зберігає перемикач include_today у config.json (виклик з UI)."""
         self.set_user_value("include_today", value)
         self.sorter.include_today = value
+
+    def write_env(self, updates: dict[str, str]) -> None:
+        """Публічний запис ключів у .env (зберігаючи решту). Оновлює й os.environ."""
+        _update_env(updates)
+        import os as _os
+        _os.environ.update(updates)
 
     def set_user_value(self, key: str, value) -> None:
         """Записує одне значення у config.json (числові перемикачі тощо)."""

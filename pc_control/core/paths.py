@@ -37,6 +37,12 @@ SORTER_STATE = BASE_DIR / "sorter_state.json"  # last_run, лічильники 
 # Стан керування гучністю
 VOLUME_OFFSETS = BASE_DIR / "volume_offsets.json"
 
+# --- Безпека API ---
+TLS_CERT = BASE_DIR / "cert.pem"           # self-signed сертифікат сервера
+TLS_KEY = BASE_DIR / "key.pem"             # приватний ключ (не комітиться)
+DEVICES_FILE = BASE_DIR / "devices.json"   # реєстр парованих пристроїв (хеші токенів)
+SECURITY_LOG = BASE_DIR / "security_audit.log"  # аудит-лог безпеки
+
 # Скріншоти, що віддає API
 SCREENSHOTS_DIR = BASE_DIR / "screenshots"
 

@@ -8,6 +8,9 @@ hiddenimports = (
     collect_submodules('pc_control')
     + collect_submodules('pycaw')
     + collect_submodules('comtypes')
+    # безпека/мережа (крок 1-2)
+    + collect_submodules('cryptography')
+    + ['waitress', 'qrcode', 'qrcode.image.pil']
 )
 
 a = Analysis(

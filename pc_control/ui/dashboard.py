@@ -32,6 +32,7 @@ from ..services import sorter
 from . import theme
 from .icon import app_icon
 from .service_icons import service_avatar
+from .pairing_panel import PairingPanel
 from .settings_panel import SettingsPanel
 
 
@@ -233,7 +234,26 @@ class Dashboard(QWidget):
         settings_scroll.setWidget(self._settings)
         self._settings_scroll = settings_scroll
         tabs.addTab(settings_scroll, "Налаштування")
+
+        # вкладка «Пристрої» — QR-парування + керування паруваннями
+        self._pairing = PairingPanel()
+        pairing_scroll = QScrollArea()
+        pairing_scroll.setWidgetResizable(True)
+        pairing_scroll.setFrameShape(QFrame.NoFrame)
+        pairing_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        pairing_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        pairing_scroll.setWidget(self._pairing)
+        tabs.addTab(pairing_scroll, "Пристрої")
+
+        # оновлювати список пристроїв при переході на вкладку
+        self._tabs = tabs
+        tabs.currentChanged.connect(self._on_tab_changed)
         outer.addWidget(tabs, 1)
+
+    def _on_tab_changed(self, index: int) -> None:
+        """При відкритті вкладки «Пристрої» — оновити QR і список."""
+        if self._tabs.tabText(index) == "Пристрої":
+            self._pairing.refresh()
 
     def _build_overview(self) -> QWidget:
         page = QWidget()

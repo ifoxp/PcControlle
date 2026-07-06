@@ -1,17 +1,22 @@
 """
-HTTP-API для віддаленого керування ПК (наприклад, із телефона).
+HTTPS-API для віддаленого керування ПК (наприклад, із телефона).
 
-Усі ендпоінти захищені токеном (?token=...) з constant-time перевіркою та
-per-IP rate-limit (див. core.security). Токен береться з .env, не з коду.
+Захист (див. core.security):
+  * per-device Bearer-токен у заголовку Authorization (не ?token= в URL);
+  * brute-force бан IP, rate-limit, (опційно) replay-захист;
+  * self-signed TLS, клієнт довіряє через pinning fingerprint із QR-парування.
 
 Ендпоінти:
-  /              — health-check (без токена)
-  /shutdown                      — миттєве вимкнення
-  /shutdown_timer?minutes=N      — вимкнення через N хв / скасування при 0
-  /toggle_monitor                — перемикання 1<->2 монітори
+  /                              — health-check (без токена)
+  /pair                          — [POST] обмін PIN → per-device токен (парування)
+  /devices                       — список парованих пристроїв
+  /manifest                      — динамічний опис команд (телефон малює сітку з цього)
+  /shutdown                      — миттєве вимкнення (dangerous)
+  /shutdown_timer?minutes=N      — вимкнення через N хв / скасування при 0 (dangerous)
+  /toggle_monitor                — перемикання 1<->2 монітори (dangerous)
   /screenshot                    — скріншот головного монітора (PNG)
-  /open_url?url=...              — відкрити URL у браузері (тільки http/https)
-  /hotkey?action=...            — гарячі клавіші (alt_tab, alt_f4, task_manager)
+  /open_url?url=...              — відкрити URL у браузері (тільки http/https, не приватні)
+  /hotkey?action=...            — гарячі клавіші (dangerous)
   /volume?level=0-100            — виставити master-гучність
   /volume_get                    — поточна master-гучність
   /sorter/run                    — запустити аналіз фото негайно
@@ -32,10 +37,17 @@ from flask import Flask, abort, jsonify, request, send_file
 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 from pynput.keyboard import Controller as KeyboardController, Key
 
-from ..core import paths
+from . import commands
+from ..core import audit, devices, paths, tls
 from ..core.config import CONFIG
 from ..core.logging_setup import get_logger
-from ..core.security import is_safe_url, require_token
+from ..core.security import (
+    check_ban,
+    client_ip,
+    is_safe_url,
+    register_auth_failure,
+    require_device,
+)
 from ..core.status import REGISTRY, SVC_API, State
 from ..services import sorter
 
@@ -51,8 +63,8 @@ HOTKEYS = {
 
 def _get_volume_interface():
     ctypes.windll.ole32.CoInitialize(None)
-    devices = AudioUtilities.GetSpeakers()
-    interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+    speakers = AudioUtilities.GetSpeakers()
+    interface = speakers.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
     return cast(interface, POINTER(IAudioEndpointVolume))
 
 
@@ -65,7 +77,7 @@ def create_app() -> Flask:
         return "PC Control is running"
 
     @app.get("/shutdown")
-    @require_token
+    @require_device(dangerous=True)
     def shutdown():
         import os
         logger.info("Shutdown command received")
@@ -74,7 +86,7 @@ def create_app() -> Flask:
         return "Shutting down..."
 
     @app.get("/shutdown_timer")
-    @require_token
+    @require_device(dangerous=True)
     def shutdown_timer():
         import os
         try:
@@ -93,7 +105,7 @@ def create_app() -> Flask:
         return f"PC will shut down in {minutes} minutes"
 
     @app.get("/toggle_monitor")
-    @require_token
+    @require_device(dangerous=True)
     def toggle_monitor():
         import os
         monitors_count = ctypes.windll.user32.GetSystemMetrics(80)
@@ -106,7 +118,7 @@ def create_app() -> Flask:
         return "Switched to 2 monitors"
 
     @app.get("/screenshot")
-    @require_token
+    @require_device
     def take_screenshot():
         logger.info("Screenshot command received")
         now = datetime.datetime.now()
@@ -123,7 +135,7 @@ def create_app() -> Flask:
             return f"Error: {e}", 500
 
     @app.get("/open_url")
-    @require_token
+    @require_device
     def open_url():
         url = request.args.get("url", "")
         if not is_safe_url(url):
@@ -135,7 +147,7 @@ def create_app() -> Flask:
         return "URL opened on PC!"
 
     @app.get("/hotkey")
-    @require_token
+    @require_device(dangerous=True)
     def hotkey():
         action = request.args.get("action", "")
         if action not in HOTKEYS:
@@ -151,7 +163,7 @@ def create_app() -> Flask:
         return f"Pressed: {action}"
 
     @app.get("/volume")
-    @require_token
+    @require_device
     def volume():
         try:
             level = int(request.args.get("level", ""))
@@ -169,7 +181,7 @@ def create_app() -> Flask:
             return f"Error: {e}", 500
 
     @app.get("/volume_get")
-    @require_token
+    @require_device
     def volume_get():
         try:
             vol = _get_volume_interface()
@@ -178,16 +190,64 @@ def create_app() -> Flask:
             return f"Error: {e}", 500
 
     @app.get("/sorter/run")
-    @require_token
+    @require_device
     def sorter_run():
         sorter.request_run_now()
         return "Sorter run requested"
 
     @app.get("/sorter/status")
-    @require_token
+    @require_device
     def sorter_status():
         svc = REGISTRY.get("sorter")
         return jsonify(svc.as_dict() if svc else {})
+
+    # ------------------------------------------------------------ парування
+    @app.post("/pair")
+    def pair():
+        """
+        Обмін PIN → per-device токен. Захищено баном/rate-limit (як і решта),
+        але авторизація тут — по PIN, не по токену (пристрій ще не має токена).
+        Тіло: JSON {"pin": "123456", "name": "Pixel 7"}.
+        """
+        ip = client_ip()
+        if check_ban(ip):
+            audit.audit(audit.PAIR_FAIL, ip=ip, reason="banned")
+            abort(403)
+
+        data = request.get_json(silent=True) or {}
+        pin = str(data.get("pin", "")).strip()
+        name = str(data.get("name", "")).strip() or "Пристрій"
+
+        audit.audit(audit.PAIR_START, ip=ip, name=name)
+        if not devices.verify_pin(pin):
+            register_auth_failure(ip, "bad_pin")
+            audit.audit(audit.PAIR_FAIL, ip=ip, name=name, reason="bad_pin")
+            abort(403)
+
+        token = devices.pair_new_device(name, ip)
+        audit.audit(audit.PAIR_OK, ip=ip, name=name)
+        REGISTRY.update(SVC_API, detail=f"Спаровано: {name}", touch=True)
+        return jsonify({
+            "token": token,
+            "server_name": "PC Control",
+            "fingerprint": tls.fingerprint(),
+        })
+
+    @app.get("/devices")
+    @require_device
+    def devices_list():
+        """Список парованих пристроїв (без хешів токенів)."""
+        return jsonify({"devices": devices.list_devices()})
+
+    # ------------------------------------------------------------ маніфест
+    @app.get("/manifest")
+    @require_device
+    def manifest():
+        """
+        Динамічний опис команд ПК. Телефон малює сітку з цього — нові команди
+        з'являються без оновлення додатка.
+        """
+        return jsonify(commands.build_manifest())
 
     return app
 
@@ -195,9 +255,20 @@ def create_app() -> Flask:
 def _serve(app: Flask) -> None:
     REGISTRY.register(SVC_API, "Веб-сервер (API)")
     cfg = CONFIG.api
-    REGISTRY.update(SVC_API, state=State.IDLE, detail=f"Слухаю {cfg.host}:{cfg.port}")
+    scheme = "https" if cfg.use_tls else "http"
+    REGISTRY.update(SVC_API, state=State.IDLE, detail=f"Слухаю {scheme}://{cfg.host}:{cfg.port}")
     try:
-        app.run(host=cfg.host, port=cfg.port, debug=False, use_reloader=False)
+        if cfg.use_tls:
+            # HTTPS: self-signed сертифікат, клієнт довіряє через pinning fingerprint.
+            # Flask-run з ssl_context — надійний шлях для TLS без reverse-proxy.
+            ctx = tls.ssl_context()
+            logger.info("API (HTTPS) fingerprint: %s", tls.fingerprint())
+            app.run(host=cfg.host, port=cfg.port, ssl_context=ctx,
+                    debug=False, use_reloader=False, threaded=True)
+        else:
+            # HTTP: продакшн-WSGI waitress (для локального режиму без TLS)
+            from waitress import serve
+            serve(app, host=cfg.host, port=cfg.port, threads=8)
     except Exception as e:
         logger.error("API server crashed: %s", e)
         REGISTRY.update(SVC_API, state=State.ERROR, detail=str(e))

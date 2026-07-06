@@ -9,3 +9,8 @@ opencv-python
 numpy
 requests
 PySide6
+
+# --- Безпека / мережа (крок 1) ---
+waitress          # продакшн-WSGI сервер (замість app.run для доступу з інтернету)
+cryptography      # генерація self-signed TLS-сертифіката
+qrcode[pil]       # QR-код парування на дашборді
