@@ -43,7 +43,32 @@
       "Bash(.venv/Scripts/flet.exe build *)",
       "Bash(PYTHONIOENCODING=utf-8 PYTHONUTF8=1 .venv/Scripts/flet.exe build apk --no-android-splash)",
       "Bash(./\"PC Control.exe\")",
-      "Bash(powershell -Command \"Get-Process 'PC Control' -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep -Milliseconds 300; if \\(Get-Process 'PC Control' -ErrorAction SilentlyContinue\\) { 'ще живий' } else { 'EXE зупинено' }\")"
+      "Bash(powershell -Command \"Get-Process 'PC Control' -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep -Milliseconds 300; if \\(Get-Process 'PC Control' -ErrorAction SilentlyContinue\\) { 'ще живий' } else { 'EXE зупинено' }\")",
+      "Bash(ls -la \"C:/Users/ifoxp/Android/sdk\" 2>&1 | head; echo \"=== Flutter ===\"; ls \"C:/Users/ifoxp/AppData/Roaming/flet/flutter\" 2>&1 | head -3 || find \"C:/Users/ifoxp\" -maxdepth 4 -name \"flutter.bat\" 2>/dev/null | head -2; echo \"=== чи є Android Studio / cmdline-tools ===\"; ls \"C:/Users/ifoxp/AppData/Local/Android/Sdk\" 2>&1 | head || echo \"немає стандартного Android SDK\")",
+      "Read(//c/Users/ifoxp/Android/sdk/**)",
+      "Read(//c/Users/ifoxp/AppData/Roaming/flet/**)",
+      "Read(//c/Users/ifoxp/**)",
+      "Read(//c/Users/ifoxp/AppData/Local/Android/**)",
+      "Bash(git commit -m 'fix\\(volume\\): сумісність з новим pycaw \\(AudioDevice без .Activate\\) *)",
+      "Bash(export ANDROID_HOME=\"C:/Users/ifoxp/Android/sdk\")",
+      "Bash(export ANDROID_SDK_ROOT=\"$ANDROID_HOME\")",
+      "Bash(yes)",
+      "Bash(powershell -Command \"Get-Process 'PC Control' -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep -Milliseconds 300; if \\(Get-Process 'PC Control' -ErrorAction SilentlyContinue\\) {'ще живий'} else {'EXE зупинено'}\")",
+      "Bash(C:/Users/ifoxp/Android/sdk/build-tools/34.0.0/aapt.exe dump *)",
+      "Bash(.venv/Scripts/python.exe -m compileall -q core screens widgets theme.py main.py)",
+      "Bash(.venv/Scripts/python.exe -c \"import sys; sys.path.insert\\(0,'.'\\); import main, theme; from screens.grid_screen import GridScreen; from screens.settings_screen import SettingsScreen; from screens.status_screen import StatusScreen; from core.pairing import parse_qr; print\\('імпорти OK'\\)\")",
+      "Bash(find pc_control -name \"server.cpython*.pyc\")",
+      "Bash(rm -rf pc_control/api/__pycache__ pc_control/services/__pycache__)",
+      "Bash(powershell -Command 'Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '\\\\''*_serve*'\\\\'' } | ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force } catch {} }')",
+      "Bash(rm -rf pc_control/api/__pycache__)",
+      "Bash(timeout 18 .venv/Scripts/python.exe -c ' *)",
+      "Bash(timeout 20 .venv/Scripts/python.exe -c ' *)",
+      "Bash(.venv/Scripts/python.exe -c \"import sys; sys.path.insert\\(0,'.'\\); import main, theme; from widgets import build_tile; print\\('імпорти OK'\\)\")",
+      "Bash(Select-Object -First 0)",
+      "Bash(Out-String)",
+      "Bash(Select-String \"x\")",
+      "Bash(.venv/Scripts/python.exe -c \"from PIL import ImageGrab; print\\('Pillow OK'\\)\")",
+      "Bash(git commit -m 'fix\\(pc\\): потокобезпечний screenshot \\(ImageGrab\\) + кнопка «Копіювати код» *)"
     ]
   }
 }

@@ -24,6 +24,10 @@ dist/
 
 # Claude Code — локальні налаштування (дозволи конкретної машини)
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
+
+# Зібраний APK (артефакт, не комітимо)
+*.apk
 
 # TLS-сертифікати API (генеруються локально, приватний ключ)
 cert.pem

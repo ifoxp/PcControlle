@@ -104,7 +104,14 @@ class PairingPanel(QWidget):
 
         # --- QR-парування ---
         payload = devices.pairing_payload()
-        qr_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        json_code = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        # QR = deep-link URL: стандартна камера Android розпізнає його й запропонує
+        # відкрити додаток PC Control, який одразу підставить дані парування.
+        import base64
+        b64 = base64.urlsafe_b64encode(json_code.encode("utf-8")).decode()
+        qr_text = f"pccontrol://pair?d={b64}"
+        # для кнопки «Копіювати» лишаємо JSON (вставляється в додаток вручну)
+        copy_text = json_code
 
         card = QFrame()
         card.setObjectName("card")
@@ -144,6 +151,11 @@ class PairingPanel(QWidget):
         manual.setTextInteractionFlags(Qt.TextSelectableByMouse)
         cl.addWidget(manual)
 
+        # кнопка «Копіювати код» — повний JSON у буфер (вставити в додаток)
+        copy_btn = QPushButton("📋 Копіювати код")
+        copy_btn.clicked.connect(lambda: self._copy_code(copy_text, copy_btn))
+        cl.addWidget(copy_btn, alignment=Qt.AlignCenter)
+
         self._root.addWidget(card)
 
         # --- список пристроїв ---
@@ -167,6 +179,14 @@ class PairingPanel(QWidget):
                 self._root.addWidget(_DeviceRow(d, self._on_revoke))
 
         self._root.addStretch(1)
+
+    def _copy_code(self, text: str, btn) -> None:
+        """Копіює JSON-код парування в буфер обміну."""
+        from PySide6.QtWidgets import QApplication
+        QApplication.clipboard().setText(text)
+        btn.setText("✅ Скопійовано")
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(1500, lambda: btn.setText("📋 Копіювати код"))
 
     def _on_revoke(self, device_id: str) -> None:
         if device_id and devices.revoke(device_id):

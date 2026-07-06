@@ -30,7 +30,6 @@ import datetime
 import threading
 import webbrowser
 
-import pyautogui
 from ctypes import POINTER, cast
 from comtypes import CLSCTX_ALL
 from flask import Flask, abort, jsonify, request, send_file
@@ -127,9 +126,13 @@ def create_app() -> Flask:
         filename = f"screenshot_{now.strftime('%Y%m%d_%H%M%S')}.png"
         filepath = paths.SCREENSHOTS_DIR / filename
         try:
+            # PIL ImageGrab — потокобезпечний (pyautogui у робочому потоці Flask
+            # падав сегфолтом). Головний монітор: bbox від (0,0).
+            from PIL import ImageGrab
             main_width = ctypes.windll.user32.GetSystemMetrics(0)
             main_height = ctypes.windll.user32.GetSystemMetrics(1)
-            pyautogui.screenshot(str(filepath), region=(0, 0, main_width, main_height))
+            img = ImageGrab.grab(bbox=(0, 0, main_width, main_height))
+            img.save(str(filepath), "PNG")
             REGISTRY.update(SVC_API, detail="Зроблено скріншот", touch=True)
             return send_file(str(filepath), mimetype="image/png")
         except Exception as e:

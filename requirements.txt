@@ -14,3 +14,4 @@ PySide6
 waitress          # продакшн-WSGI сервер (замість app.run для доступу з інтернету)
 cryptography      # генерація self-signed TLS-сертифіката
 qrcode[pil]       # QR-код парування на дашборді
+pillow            # ImageGrab (потокобезпечний скріншот) + QR-рендер
