@@ -1,0 +1,3 @@
+# PC Control — мобільний пульт (Flet, Android)
+flet>=0.24
+httpx           # HTTP-клієнт з підтримкою кастомного TLS (pinning)

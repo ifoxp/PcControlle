@@ -1,0 +1,30 @@
+[project]
+name = "pc_control_remote"
+version = "1.0.0"
+description = "PC Control — пульт керування ПК"
+requires-python = ">=3.9"
+dependencies = [
+    "flet>=0.24",
+    "httpx",
+]
+
+[tool.flet]
+# Метадані застосунку
+org = "com.shramix"
+product = "PC Control"
+company = "ShrAmix"
+copyright = "Copyright (C) 2026"
+
+[tool.flet.app]
+path = "."
+
+# Іконки (Flet бере з assets/): icon.png — основна, icon_foreground/monochrome —
+# для Android adaptive + themed icons (перефарбовування як на Pixel).
+[tool.flet.android]
+adaptive_icon_background = "#0f1116"
+
+# Дозволи Android: зберігати медіа в Downloads, доступ до сховища.
+[tool.flet.android.permission]
+"android.permission.INTERNET" = true
+"android.permission.WRITE_EXTERNAL_STORAGE" = true
+"android.permission.READ_EXTERNAL_STORAGE" = true

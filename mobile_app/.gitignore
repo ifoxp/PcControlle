@@ -1,0 +1,16 @@
+# Flet / Python
+.venv/
+__pycache__/
+*.py[cod]
+
+# Збірка Flet
+build/
+*.apk
+*.aab
+
+# Локальний стан
+pcs.json
+
+# Тимчасові файли збірки
+apk_build.log
+assets/_mono_preview.png
