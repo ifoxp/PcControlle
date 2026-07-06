@@ -64,7 +64,9 @@ HOTKEYS = {
 def _get_volume_interface():
     ctypes.windll.ole32.CoInitialize(None)
     speakers = AudioUtilities.GetSpeakers()
-    interface = speakers.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+    # новий pycaw повертає AudioDevice-обгортку без .Activate — беремо ._dev
+    com = speakers if hasattr(speakers, "Activate") else getattr(speakers, "_dev", speakers)
+    interface = com.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
     return cast(interface, POINTER(IAudioEndpointVolume))
 
 

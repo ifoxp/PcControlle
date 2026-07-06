@@ -109,13 +109,30 @@ def _save_all_offsets(all_offsets: dict) -> None:
 # Доступ до аудіо
 # ---------------------------------------------------------------------------
 def _get_master_device():
-    """Повертає (interface, device_id) активного пристрою виводу."""
+    """
+    Повертає (interface, device_id) активного пристрою виводу.
+
+    Сумісно зі старим і новим pycaw: у нових версіях GetSpeakers() повертає
+    AudioDevice-обгортку (сирий COM — у ._dev, ID — у .id), у старих — прямий
+    COM-об'єкт із .Activate()/.GetId().
+    """
     device = AudioUtilities.GetSpeakers()
-    try:
-        device_id = device.GetId()   # стабільний ID цього пристрою (динаміки/навушники)
-    except Exception:
-        device_id = "default"
-    interface = device.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+
+    # ID пристрою (динаміки/навушники) — стабільний між тіками
+    device_id = "default"
+    for getter in (lambda: device.id, lambda: device.GetId()):
+        try:
+            device_id = getter() or device_id
+            break
+        except Exception:
+            continue
+
+    # COM-об'єкт, у якого є .Activate: сам device (старий pycaw) або ._dev (новий)
+    com = device
+    if not hasattr(com, "Activate"):
+        com = getattr(device, "_dev", device)
+
+    interface = com.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
     return cast(interface, POINTER(IAudioEndpointVolume)), device_id
 
 
