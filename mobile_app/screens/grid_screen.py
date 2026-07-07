@@ -223,6 +223,9 @@ class GridScreen(ft.Container):
             try:
                 manifest = ApiClient(pc).manifest()
                 self.storage.save_manifest(pc["id"], manifest)
+                # авто-стилізація при першому паруванні (кольори за групою,
+                # підтвердження тільки на shutdown)
+                self.storage.apply_default_styling(manifest.get("commands", []))
                 self._grid.controls = self._tiles_from(manifest)
                 self._status.value = f"{len(manifest.get('commands', []))} команд · з'єднано"
                 self._status.color = theme.OK

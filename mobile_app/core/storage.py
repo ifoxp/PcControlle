@@ -165,6 +165,33 @@ class Storage:
         for pos, cid in enumerate(order):
             self.set_cmd_override(cid, order=pos)
 
+    # кольори за групою — для авто-стилізації при першому паруванні
+    _GROUP_COLORS = {
+        "Система": "#ff6b6b", "Медіа": "#4c8dff", "Звук": "#22c55e",
+        "Клавіші": "#feca57", "Браузер": "#48dbfb", "Буфер": "#a55eea",
+        "Сортувальник": "#feca57",
+    }
+
+    def apply_default_styling(self, commands: list[dict]) -> None:
+        """
+        При ПЕРШОМУ паруванні (немає жодного override) — авто-стилізація:
+        кожній команді колір за групою, а підтвердження лишаємо тільки на «shutdown».
+        Викликається один раз; далі користувач редагує вручну.
+        """
+        data = self._read()
+        if data.get("styled_once") or data.get("cmd_overrides"):
+            return  # вже стилізовано або є ручні зміни — не чіпаємо
+        ov = data.setdefault("cmd_overrides", {})
+        for i, c in enumerate(commands):
+            cid = c.get("id")
+            if not cid:
+                continue
+            color = self._GROUP_COLORS.get(c.get("group", ""), "#4c8dff")
+            confirm = (cid == "shutdown")  # підтвердження за замовч. тільки на вимкнення
+            ov[cid] = {"color": color, "confirm": confirm, "order": i}
+        data["styled_once"] = True
+        self._write(data)
+
     def apply_overrides(self, commands: list[dict]) -> list[dict]:
         """Накладає користувацькі override на команди маніфесту + сортує/фільтрує."""
         overrides = self._read().get("cmd_overrides", {})

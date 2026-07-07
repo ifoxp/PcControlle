@@ -54,20 +54,31 @@ def main(page: "ft.Page"):
         pass
 
     # back-стек: коли відкрито overlay (скрін/редактор), системний «назад» його
-    # закриває, а не вбиває додаток. Реєстрація — page._back_stack (список callable).
+    # закриває, а не вбиває додаток. На Flet-Android системний back доставляється
+    # через on_view_pop (навіть без явних views) та on_keyboard_event.
     page._back_stack = []
 
+    def _handle_back() -> bool:
+        """Обробити «назад». True — щось закрили; False — стек порожній."""
+        if page._back_stack:
+            cb = page._back_stack.pop()
+            try:
+                cb()
+            except Exception:
+                pass
+            return True
+        return False
+
+    def _on_view_pop(e):
+        _handle_back()
+
     def _on_keyboard(e):
-        # Android «назад» приходить сюди як спец-клавіша
         key = (getattr(e, "key", "") or "").lower()
         if key in ("escape", "browser back", "go back", "back"):
-            if page._back_stack:
-                cb = page._back_stack.pop()
-                try:
-                    cb()
-                except Exception:
-                    pass
+            _handle_back()
+
     try:
+        page.on_view_pop = _on_view_pop
         page.on_keyboard_event = _on_keyboard
     except Exception:
         pass
