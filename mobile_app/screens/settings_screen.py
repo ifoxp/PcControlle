@@ -78,18 +78,91 @@ class SettingsScreen(ft.Container):
         confirm_switch.on_change = on_confirm
         confirm_card = theme.card(ft.Row([
             ft.Column([
-                ft.Text("Підтверджувати небезпечні", color=theme.TEXT,
+                ft.Text("Підтверджувати небезпечні (за замовч.)", color=theme.TEXT,
                         weight=ft.FontWeight.BOLD),
-                ft.Text("Питати перед вимкненням тощо", size=12, color=theme.TEXT_DIM),
+                ft.Text("Для кожної іконки окремо — у редакторі", size=12,
+                        color=theme.TEXT_DIM),
             ], expand=True, spacing=1),
             confirm_switch,
         ]))
 
+        # підказка про редактор іконок (#3)
+        hint_card = theme.card(ft.Row([
+            ft.Icon(ft.Icons.TOUCH_APP, color=theme.ACCENT),
+            ft.Column([
+                ft.Text("Редагування іконок", color=theme.TEXT,
+                        weight=ft.FontWeight.BOLD),
+                ft.Text("Довге натискання на іконку → змінити назву, колір,\n"
+                        "підтвердження або сховати її.", size=12, color=theme.TEXT_DIM),
+            ], expand=True, spacing=1),
+        ], spacing=10))
+
         header = ft.Text("Вигляд", size=22, weight=ft.FontWeight.BOLD, color=theme.TEXT)
 
         # без вкладеної SafeArea (MainShell уже дає одну; вкладені ламали рендер)
+        # секція керування іконками (показати/сховати + порядок) — #3
+        icons_card = self._build_icons_section()
+
         self.content = ft.Container(
-            content=ft.Column([header, cols_card, align_card, confirm_card],
+            content=ft.Column([header, cols_card, align_card, confirm_card,
+                               hint_card, icons_card],
                               spacing=14, scroll=ft.ScrollMode.AUTO),
-            padding=18, expand=True,
+            padding=ft.Padding(left=18, top=55, right=18, bottom=18), expand=True,
         )
+
+    def _build_icons_section(self) -> ft.Control:
+        """Список усіх команд активного ПК: показати/сховати + порядок."""
+        pc = self.storage.get_active()
+        manifest = self.storage.load_manifest(pc["id"]) if pc else None
+        cmds = manifest.get("commands", []) if manifest else []
+        if not cmds:
+            return ft.Container()
+
+        overrides = {c["id"]: self.storage.get_cmd_override(c["id"]) for c in cmds}
+        # порядок як у сітці
+        ordered = sorted(cmds, key=lambda c: overrides.get(c["id"], {}).get("order", cmds.index(c)))
+        all_ids = [c["id"] for c in ordered]
+
+        rows = []
+        for c in ordered:
+            cid = c["id"]
+            hidden = bool(overrides.get(cid, {}).get("hidden"))
+            title = overrides.get(cid, {}).get("title") or c.get("title", cid)
+
+            vis = ft.IconButton(
+                ft.Icons.VISIBILITY_OFF if hidden else ft.Icons.VISIBILITY,
+                icon_color=theme.DANGER if hidden else theme.OK,
+                tooltip="Показати/сховати",
+                on_click=lambda e, i=cid, h=hidden: self._toggle_vis(i, h),
+            )
+            up = ft.IconButton(ft.Icons.ARROW_UPWARD, icon_color=theme.TEXT_DIM,
+                               on_click=lambda e, i=cid: self._move(i, all_ids, -1))
+            down = ft.IconButton(ft.Icons.ARROW_DOWNWARD, icon_color=theme.TEXT_DIM,
+                                 on_click=lambda e, i=cid: self._move(i, all_ids, +1))
+            rows.append(ft.Row([
+                ft.Text(title, color=theme.TEXT_DIM if hidden else theme.TEXT, expand=True),
+                up, down, vis,
+            ]))
+
+        return theme.card(ft.Column([
+            ft.Text("Іконки (порядок і видимість)", color=theme.TEXT,
+                    weight=ft.FontWeight.BOLD),
+            *rows,
+        ], spacing=4))
+
+    def _toggle_vis(self, cmd_id: str, was_hidden: bool):
+        self.storage.set_cmd_override(cmd_id, hidden=not was_hidden)
+        self.on_changed()
+        self._rebuild()
+
+    def _move(self, cmd_id: str, all_ids: list, direction: int):
+        self.storage.move_command(cmd_id, all_ids, direction)
+        self.on_changed()
+        self._rebuild()
+
+    def _rebuild(self):
+        self._build()
+        try:
+            self._pg.update()
+        except Exception:
+            pass

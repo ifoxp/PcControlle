@@ -99,7 +99,15 @@
       "Bash(.venv/Scripts/python.exe -c \"from PIL import Image; i=Image.open\\('_p0.png'\\); i.thumbnail\\(\\(360,720\\)\\); i.save\\('_p0s.png'\\); print\\(i.size\\)\")",
       "Bash(.venv/Scripts/python.exe -c \"from PIL import Image; i=Image.open\\('_pbtn.png'\\); i.thumbnail\\(\\(360,720\\)\\); i.save\\('_pbtns.png'\\); print\\(i.size\\)\")",
       "Bash(.venv/Scripts/python.exe -c \"from PIL import Image; i=Image.open\\('_pbtn2.png'\\); i.thumbnail\\(\\(360,720\\)\\); i.save\\('_pbtn2s.png'\\); print\\(i.size\\)\")",
-      "Bash(.venv/Scripts/python.exe -c \"from PIL import Image; i=Image.open\\('_check.png'\\); i.thumbnail\\(\\(360,720\\)\\); i.save\\('_checks.png'\\); print\\(i.size\\)\")"
+      "Bash(.venv/Scripts/python.exe -c \"from PIL import Image; i=Image.open\\('_check.png'\\); i.thumbnail\\(\\(360,720\\)\\); i.save\\('_checks.png'\\); print\\(i.size\\)\")",
+      "Bash(sed -n '74,100p' widgets/media_view.py)",
+      "Bash(.venv/Scripts/python.exe -c \"import flet as ft; print\\('page methods clipboard:', [m for m in dir\\(ft.Page\\) if 'clip' in m.lower\\(\\)]\\)\")",
+      "Bash(sed -n '100,146p' widgets/media_view.py)",
+      "Bash(.venv/Scripts/python.exe -c \"import flet as ft, inspect; print\\('get_clipboard:', hasattr\\(ft.Page,'get_clipboard'\\)\\); print\\('set_clipboard:', hasattr\\(ft.Page,'set_clipboard'\\)\\)\")",
+      "Bash(.venv/Scripts/python.exe -c \"import sys; sys.path.insert\\(0,'.'\\); from widgets.editor import open_command_editor; from screens.settings_screen import SettingsScreen; print\\('імпорти OK'\\)\")",
+      "Bash(C:/Users/ifoxp/Android/sdk/platform-tools/adb.exe devices *)",
+      "Bash(git commit -m 'feat\\(pc\\): буфер телефон→ПК, стабільність volume, дедуплікація пристроїв *)",
+      "Bash(git commit -m 'feat\\(mobile\\): редактор іконок, буфер, скрін-фікс, керування видимістю/порядком *)"
     ]
   }
 }

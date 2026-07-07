@@ -72,18 +72,20 @@ def _share(ctx: WidgetContext, path: str) -> None:
 
 
 def present_bytes(ctx: WidgetContext, data: bytes, *, kind: str, title: str) -> None:
-    """Відкриває повноекранний перегляд отриманих байтів (image/audio)."""
+    """
+    Повноекранний перегляд отриманих байтів (image/audio) через page.overlay —
+    надійніше за AlertDialog (той на Android не рендерив великий вміст).
+    """
+    page = ctx.page
     if kind == "image":
         suffix = ".png"
         b64 = base64.b64encode(data).decode()
-        viewer = ft.InteractiveViewer(
-            min_scale=1.0, max_scale=5.0, boundary_margin=theme.margin_all(20),
-            content=ft.Image(src_base64=b64, fit=ft.ImageFit.CONTAIN,
-                             gapless_playback=True),
+        body = ft.InteractiveViewer(
+            min_scale=0.8, max_scale=6.0,
+            content=ft.Image(src_base64=b64, fit=ft.BoxFit.CONTAIN),
             expand=True,
         )
-        body = viewer
-    else:  # audio
+    else:
         suffix = ".wav"
         b64 = base64.b64encode(data).decode()
         body = ft.Column(
@@ -95,34 +97,33 @@ def present_bytes(ctx: WidgetContext, data: bytes, *, kind: str, title: str) -> 
 
     tmp_path = _save_temp(data, suffix)
 
-    def do_share(_):
-        _share(ctx, tmp_path)
+    def close(_=None):
+        try:
+            if overlay in page.overlay:
+                page.overlay.remove(overlay)
+            page.update()
+        except Exception:
+            pass
 
-    def do_save(_):
-        _save_to_downloads(ctx, data, suffix)
-
-    def close(_):
-        theme.dismiss(ctx.page)
-
-    actions = ft.Row(
+    top_bar = ft.Row(
         [
-            ft.FilledButton("Поділитися", icon=ft.Icons.SHARE, on_click=do_share),
-            ft.FilledButton("Зберегти", icon=ft.Icons.DOWNLOAD, on_click=do_save,
-                            style=ft.ButtonStyle(bgcolor=theme.ACCENT_DIM)),
-            ft.TextButton("Закрити", on_click=close),
+            ft.IconButton(ft.Icons.CLOSE, icon_color=theme.TEXT, on_click=close),
+            ft.Text(title, color=theme.TEXT, size=16, expand=True),
+            ft.IconButton(ft.Icons.SHARE, icon_color=theme.ACCENT,
+                          on_click=lambda _: _share(ctx, tmp_path)),
+            ft.IconButton(ft.Icons.DOWNLOAD, icon_color=theme.ACCENT,
+                          on_click=lambda _: _save_to_downloads(ctx, data, suffix)),
         ],
-        alignment=ft.MainAxisAlignment.CENTER, spacing=8, wrap=True,
     )
 
-    dlg = ft.AlertDialog(
-        modal=False, bgcolor=theme.BG,
-        content=ft.Container(
-            content=ft.Column([body, actions], spacing=12, expand=True),
-            width=560, height=680, padding=6,
-        ),
-        content_padding=0,
+    overlay = ft.Container(
+        bgcolor="#000000",
+        expand=True,
+        padding=ft.Padding(left=8, top=44, right=8, bottom=12),
+        content=ft.Column([top_bar, body], spacing=8, expand=True),
     )
-    theme.show(ctx.page, dlg)
+    page.overlay.append(overlay)
+    page.update()
 
 
 def build_media_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
@@ -143,4 +144,4 @@ def build_media_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
                 ctx.page.update()
         ctx.run_async(work)
 
-    return grid_tile(cmd, fetch, busy_ref=busy)
+    return grid_tile(cmd, fetch, busy_ref=busy, on_long_press=ctx.on_edit)

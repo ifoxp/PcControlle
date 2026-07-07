@@ -79,12 +79,21 @@ class GridScreen(ft.Container):
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
             padding=theme.pad_only(left=18, right=8, top=8, bottom=4),
         )
-        self.content = ft.Column([header, self._grid], spacing=0, expand=True)
+        # обгортка для вертикального вирівнювання сітки
+        self._grid_col = ft.Column([self._grid], expand=True)
+        self.content = ft.Column([header, self._grid_col], spacing=0, expand=True)
 
     def _apply_grid_config(self) -> None:
-        # проста надійна сітка: лише к-ть колонок (вирівнювання через пружини
-        # ламало рендер на Flet-Android; повернемо пізніше безпечним способом)
         s = self.storage.get_settings()
+        align = s.get("align", "center")
+        # вертикальне вирівнювання сітки через alignment колонки (безпечно, без пружин)
+        self._grid.expand = (align == "top")
+        if hasattr(self, "_grid_col"):
+            self._grid_col.alignment = {
+                "top": ft.MainAxisAlignment.START,
+                "center": ft.MainAxisAlignment.CENTER,
+                "bottom": ft.MainAxisAlignment.END,
+            }.get(align, ft.MainAxisAlignment.CENTER)
         self._grid.runs_count = int(s.get("columns", 4))
         self._align = s.get("align", "center")
 
@@ -97,7 +106,19 @@ class GridScreen(ft.Container):
     # ------------------------------------------------------------ дані
     def _tiles_from(self, manifest: dict) -> list:
         ctx = self._ctx()
-        return [build_tile(c, ctx) for c in manifest.get("commands", [])]
+        cmds = self.storage.apply_overrides(manifest.get("commands", []))
+        return [build_tile(c, ctx, on_edit=lambda cmd: self._edit_cmd(cmd)) for c in cmds]
+
+    def _edit_cmd(self, cmd: dict) -> None:
+        """Редактор іконки (довге натискання): назва, колір, підтвердження, сховати."""
+        from widgets.editor import open_command_editor
+        open_command_editor(self._pg, self.storage, cmd, on_saved=self._reload_after_edit)
+
+    def _reload_after_edit(self) -> None:
+        m = self._cached_manifest()
+        if m:
+            self._grid.controls = self._tiles_from(m)
+            self._safe_update()
 
     def _cached_manifest(self):
         pc = self.storage.get_active()

@@ -83,4 +83,4 @@ def build_slider_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
 
         ctx.run_async(load_current)
 
-    return grid_tile(cmd, open_slider)
+    return grid_tile(cmd, open_slider, on_long_press=ctx.on_edit)

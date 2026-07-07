@@ -22,6 +22,7 @@ class WidgetContext:
     toast: Callable                # toast(msg, error=False) — снекбар
     open_sheet: Callable           # open_sheet(control) — модальний лист (для медіа/слайдера)
     confirm_dangerous: bool = True # чи питати підтвердження перед небезпечними діями
+    on_edit: Callable | None = None  # довге натискання на плитку → редактор
 
 
 def icon_for(name: str) -> str:
@@ -45,13 +46,16 @@ def run_in_thread(page: ft.Page, fn: Callable) -> None:
     page.run_thread(fn)
 
 
-def grid_tile(cmd: dict, on_tap: Callable, *, busy_ref: dict | None = None) -> ft.Control:
+def grid_tile(cmd: dict, on_tap: Callable, *, busy_ref: dict | None = None,
+              on_long_press: Callable | None = None) -> ft.Control:
     """
-    Стандартна плитка сітки: іконка зверху, підпис знизу, тап → on_tap.
-    Небезпечні (dangerous) підсвічуються червоною рамкою.
+    Стандартна плитка сітки: іконка зверху, підпис знизу, тап → on_tap,
+    довге натискання → on_long_press (редактор). Небезпечні — червона рамка.
+    Колір іконки — user_color (якщо заданий), інакше акцент/danger.
     """
     dangerous = bool(cmd.get("dangerous"))
-    accent = theme.DANGER if dangerous else theme.ACCENT
+    user_color = cmd.get("user_color")
+    accent = user_color or (theme.DANGER if dangerous else theme.ACCENT)
 
     icon = ft.Icon(icon_for(cmd.get("icon", "")), size=30, color=accent)
     label = ft.Text(
@@ -71,12 +75,12 @@ def grid_tile(cmd: dict, on_tap: Callable, *, busy_ref: dict | None = None) -> f
     container = ft.Container(
         content=inner,
         bgcolor=theme.SURFACE,
-        # без 8-значного hex з альфою (ламав рендер на Android) і без aspect_ratio
         border=theme.border_all(1, theme.DANGER if dangerous else theme.BORDER),
         border_radius=theme.RADIUS,
         padding=theme.pad(h=8, v=14),
         ink=True,
         on_click=lambda e: on_tap(),
+        on_long_press=(lambda e: on_long_press()) if on_long_press else None,
     )
 
     # дозволяємо віджету керувати індикатором зайнятості

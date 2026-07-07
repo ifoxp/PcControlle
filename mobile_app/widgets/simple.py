@@ -54,7 +54,7 @@ def _run_with_confirm(cmd: dict, ctx: WidgetContext, busy: dict,
 # ---------------------------------------------------------------- button
 def build_button_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
     busy: dict = {}
-    tile = grid_tile(cmd, lambda: _run_with_confirm(cmd, ctx, busy), busy_ref=busy)
+    tile = grid_tile(cmd, lambda: _run_with_confirm(cmd, ctx, busy), busy_ref=busy, on_long_press=ctx.on_edit)
     return tile
 
 
@@ -62,7 +62,7 @@ def build_button_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
 def build_toggle_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
     # toggle шле той самий запит (сервер сам перемикає стан, напр. монітори/пауза)
     busy: dict = {}
-    return grid_tile(cmd, lambda: _run_with_confirm(cmd, ctx, busy), busy_ref=busy)
+    return grid_tile(cmd, lambda: _run_with_confirm(cmd, ctx, busy), busy_ref=busy, on_long_press=ctx.on_edit)
 
 
 # ---------------------------------------------------------------- text_input
@@ -95,7 +95,7 @@ def build_text_input_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
         )
         theme.show(ctx.page, sheet)
 
-    return grid_tile(cmd, open_input, busy_ref=busy)
+    return grid_tile(cmd, open_input, busy_ref=busy, on_long_press=ctx.on_edit)
 
 
 # ---------------------------------------------------------------- picker
@@ -125,7 +125,7 @@ def build_picker_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
         )
         theme.show(ctx.page, sheet)
 
-    return grid_tile(cmd, open_picker, busy_ref=busy)
+    return grid_tile(cmd, open_picker, busy_ref=busy, on_long_press=ctx.on_edit)
 
 
 # ---------------------------------------------------------------- audio
@@ -148,4 +148,70 @@ def build_audio_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
                 ctx.page.update()
         ctx.run_async(work)
 
-    return grid_tile(cmd, fetch_and_play, busy_ref=busy)
+    return grid_tile(cmd, fetch_and_play, busy_ref=busy, on_long_press=ctx.on_edit)
+
+
+def _read_clipboard(ctx: WidgetContext) -> str:
+    """Читає буфер обміну телефона (async у Flet 0.85 → чекаємо через run_task)."""
+    async def _get():
+        try:
+            return await ctx.page.clipboard.get()
+        except Exception:
+            return ""
+    try:
+        fut = ctx.page.run_task(_get)
+        return (fut.result(timeout=5) or "").strip()
+    except Exception:
+        return ""
+
+
+# ------------------------------------------------- url_clipboard (#9)
+def build_url_clipboard_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
+    """Бере посилання з буфера телефона й одразу відкриває його на ПК."""
+    busy: dict = {}
+    field = cmd.get("params", {}).get("name", "url")
+
+    def go():
+        def work():
+            set_busy(busy, True); ctx.page.update()
+            try:
+                url = _read_clipboard(ctx)
+                if not url:
+                    ctx.toast("Буфер порожній", error=True)
+                    return
+                if not (url.startswith("http://") or url.startswith("https://")):
+                    url = "https://" + url
+                resp = ctx.client.get_text(cmd["path"], {field: url})
+                ctx.toast(f"Відкрито: {url[:40]}")
+            except Exception as e:
+                ctx.toast(str(e), error=True)
+            finally:
+                set_busy(busy, False); ctx.page.update()
+        ctx.run_async(work)
+
+    return grid_tile(cmd, go, busy_ref=busy, on_long_press=ctx.on_edit)
+
+
+# ------------------------------------------------- push_clipboard (#10)
+def build_push_clipboard_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
+    """Бере текст із буфера телефона й кладе в буфер обміну ПК."""
+    busy: dict = {}
+    field = cmd.get("params", {}).get("name", "text")
+
+    def go():
+        def work():
+            set_busy(busy, True); ctx.page.update()
+            try:
+                text = _read_clipboard(ctx)
+                if not text:
+                    ctx.toast("Буфер телефона порожній", error=True)
+                    return
+                resp = ctx.client.get_text(cmd["path"], {field: text})
+                ctx.toast(resp.strip()[:80] or "Надіслано")
+            except Exception as e:
+                ctx.toast(str(e), error=True)
+            finally:
+                set_busy(busy, False); ctx.page.update()
+        ctx.run_async(work)
+
+    return grid_tile(cmd, go, busy_ref=busy, on_long_press=ctx.on_edit)

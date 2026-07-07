@@ -16,6 +16,27 @@ import theme
 from core import api_client, pairing
 
 
+def _device_name() -> str:
+    """Назва пристрою за замовчуванням = модель телефона (Android getprop)."""
+    try:
+        import subprocess
+        model = subprocess.check_output(
+            ["getprop", "ro.product.model"], timeout=2
+        ).decode().strip()
+        if model:
+            return model
+    except Exception:
+        pass
+    try:
+        import platform
+        n = platform.node()
+        if n:
+            return n
+    except Exception:
+        pass
+    return "Мій телефон"
+
+
 class PairScreen(ft.Container):
     def __init__(self, page, storage, on_paired, on_cancel=None, prefill_code=""):
         super().__init__(expand=True, bgcolor=theme.BG)
@@ -39,7 +60,7 @@ class PairScreen(ft.Container):
             label="Код парування (встав сюди)", multiline=True, min_lines=2, max_lines=4,
             color=theme.TEXT,
         )
-        self._name = ft.TextField(label="Назва телефона", value="Мій телефон",
+        self._name = ft.TextField(label="Назва телефона", value=_device_name(),
                                   color=theme.TEXT)
         self._host = ft.TextField(label="Або адреса (IP)", color=theme.TEXT)
         self._pin = ft.TextField(label="PIN", color=theme.TEXT)

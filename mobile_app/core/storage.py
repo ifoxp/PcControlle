@@ -66,8 +66,11 @@ class Storage:
             "token": token,
             "fingerprint": fingerprint,
         }
-        # перепарування того самого host:port — замінюємо
-        pcs = [p for p in pcs if not (p["host"] == host and p["port"] == pc["port"])]
+        # дедуплікація: той самий ПК за host:port АБО за fingerprint — замінюємо
+        pcs = [p for p in pcs if not (
+            (p["host"] == host and p["port"] == pc["port"])
+            or (fingerprint and p.get("fingerprint") == fingerprint)
+        )]
         pcs.append(pc)
         data["pcs"] = pcs
         data["active"] = pc["id"]
@@ -124,3 +127,49 @@ class Storage:
         data = self._read()
         data.setdefault("ui", {})[key] = value
         self._write(data)
+
+    # ------------------------------------------------ per-command налаштування
+    def get_cmd_override(self, cmd_id: str) -> dict:
+        """Користувацькі перевизначення команди: title, color, confirm, hidden, order."""
+        return self._read().get("cmd_overrides", {}).get(cmd_id, {})
+
+    def set_cmd_override(self, cmd_id: str, **fields) -> None:
+        data = self._read()
+        ov = data.setdefault("cmd_overrides", {}).setdefault(cmd_id, {})
+        ov.update({k: v for k, v in fields.items() if v is not None})
+        self._write(data)
+
+    def move_command(self, cmd_id: str, all_ids: list[str], direction: int) -> None:
+        """Переміщує команду в порядку (direction: -1 вгору, +1 вниз)."""
+        # поточний порядок (з override або дефолтний за all_ids)
+        overrides = self._read().get("cmd_overrides", {})
+        order = sorted(all_ids, key=lambda i: overrides.get(i, {}).get("order", all_ids.index(i)))
+        if cmd_id not in order:
+            return
+        idx = order.index(cmd_id)
+        new_idx = idx + direction
+        if not (0 <= new_idx < len(order)):
+            return
+        order[idx], order[new_idx] = order[new_idx], order[idx]
+        for pos, cid in enumerate(order):
+            self.set_cmd_override(cid, order=pos)
+
+    def apply_overrides(self, commands: list[dict]) -> list[dict]:
+        """Накладає користувацькі override на команди маніфесту + сортує/фільтрує."""
+        overrides = self._read().get("cmd_overrides", {})
+        result = []
+        for c in commands:
+            ov = overrides.get(c.get("id"), {})
+            if ov.get("hidden"):
+                continue
+            merged = dict(c)
+            if ov.get("title"):
+                merged["title"] = ov["title"]
+            if ov.get("color"):
+                merged["user_color"] = ov["color"]
+            if "confirm" in ov:
+                merged["dangerous"] = bool(ov["confirm"])
+            merged["_order"] = ov.get("order", 999)
+            result.append(merged)
+        result.sort(key=lambda x: x.get("_order", 999))
+        return result
