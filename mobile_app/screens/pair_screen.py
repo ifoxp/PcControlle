@@ -1,29 +1,23 @@
 """
-Екран парування нового ПК.
+Екран парування нового ПК (спрощена, стабільна версія для Android).
 
-Два шляхи (як домовлено — QR основний, ручний fallback):
-  1. «Вставити код» — користувач вставляє JSON із QR (зчитаний будь-яким сканером
-     або скопійований) у поле. Найнадійніше крос-платформно.
-  2. Ручний ввід — адреса, порт, PIN, fingerprint окремими полями.
-
-Після введення виконуємо api_client.pair() і зберігаємо ПК у сховище.
-
-Примітка про камеру: пряме сканування камерою у Flet потребує платформного
-плагіна; на етапі MVP основний шлях — вставка коду. Кнопка «Сканувати камерою»
-залишена як заготовка (див. _scan_camera).
+Уникаємо контролів, що ламали рендер на flet-Android (ExpansionTile, вкладена
+SafeArea). Мінімум: поле коду + назва + кнопка. Ручний ввід — окремими полями,
+завжди видимими (без розкривної панелі).
 """
 
 from __future__ import annotations
+
+import threading
 
 import flet as ft
 
 import theme
 from core import api_client, pairing
-from widgets.base import run_in_thread
 
 
 class PairScreen(ft.Container):
-    def __init__(self, page: ft.Page, storage, on_paired, on_cancel=None, prefill_code=""):
+    def __init__(self, page, storage, on_paired, on_cancel=None, prefill_code=""):
         super().__init__(expand=True, bgcolor=theme.BG)
         self._pg = page
         self.storage = storage
@@ -31,111 +25,91 @@ class PairScreen(ft.Container):
         self.on_cancel = on_cancel
         self._prefill = prefill_code or ""
         self._build()
+
+    def _toast(self, msg, error=False):
+        try:
+            theme.show(self._pg, ft.SnackBar(
+                ft.Text(msg, color="white"),
+                bgcolor=theme.DANGER if error else theme.SURFACE_HI))
+        except Exception:
+            pass
+
+    def _build(self):
+        self._code = ft.TextField(
+            label="Код парування (встав сюди)", multiline=True, min_lines=2, max_lines=4,
+            color=theme.TEXT,
+        )
+        self._name = ft.TextField(label="Назва телефона", value="Мій телефон",
+                                  color=theme.TEXT)
+        self._host = ft.TextField(label="Або адреса (IP)", color=theme.TEXT)
+        self._pin = ft.TextField(label="PIN", color=theme.TEXT)
+        self._fp = ft.TextField(label="Відбиток (fingerprint)", color=theme.TEXT)
+        self._status = ft.Text("", size=13, color=theme.TEXT_DIM)
+
         if self._prefill:
             self._code.value = self._prefill
 
-    def did_mount(self):
-        # авто-парування зі скану камери — після монтування (щоб run_thread не крешив)
-        if self._prefill:
-            try:
-                self._pair_from_code(None)
-            except Exception:
-                pass
-
-    def _toast(self, msg: str, error: bool = False) -> None:
-        theme.show(self._pg, ft.SnackBar(ft.Text(msg, color="white"),
-                                   bgcolor=theme.DANGER if error else theme.SURFACE_HI))
-
-    def _build(self) -> None:
-        self._code = ft.TextField(
-            label="Код парування (JSON з QR)", multiline=True, min_lines=2, max_lines=4,
-            color=theme.TEXT, hint_text='{"host":"...","port":5050,"pin":"...","fingerprint":"..."}',
-        )
-        self._name = ft.TextField(label="Назва цього телефона", value="Мій телефон",
-                                  color=theme.TEXT)
-        self._progress = ft.ProgressRing(visible=False, width=20, height=20)
-
-        paste_btn = ft.FilledButton("Підключити за кодом", icon=ft.Icons.LINK,
-                                    on_click=self._pair_from_code)
-
-        # ручний ввід (розкривний)
-        self._host = ft.TextField(label="Адреса (IP)", color=theme.TEXT)
-        self._port = ft.TextField(label="Порт", value="5050", width=110, color=theme.TEXT)
-        self._pin = ft.TextField(label="PIN", color=theme.TEXT)
-        self._fp = ft.TextField(label="Відбиток (fingerprint)", color=theme.TEXT)
-        manual_btn = ft.OutlinedButton("Підключити вручну", on_click=self._pair_manual)
-
-        manual = ft.ExpansionTile(
-            title=ft.Text("Ввести вручну", color=theme.TEXT_DIM),
-            collapsed_icon_color=theme.TEXT_DIM, icon_color=theme.ACCENT,
-            controls=[
-                ft.Container(
-                    ft.Column([
-                        ft.Row([self._host, self._port]),
-                        self._pin, self._fp, manual_btn,
-                    ], spacing=10),
-                    padding=theme.pad(h=4, v=8),
-                )
+        col = ft.Column(
+            [
+                ft.Icon(ft.Icons.PHONELINK_LOCK, size=44, color=theme.ACCENT),
+                ft.Text("Підключення до ПК", size=22, weight=ft.FontWeight.BOLD,
+                        color=theme.TEXT),
+                ft.Text("На ПК: Панель → Пристрої. Скопіюй код і встав нижче.",
+                        size=13, color=theme.TEXT_DIM),
+                self._name,
+                self._code,
+                ft.FilledButton("Підключити за кодом", icon=ft.Icons.LINK,
+                                on_click=self._pair_from_code),
+                ft.Divider(color=theme.BORDER),
+                ft.Text("Або вручну:", size=13, color=theme.TEXT_DIM),
+                self._host,
+                self._pin,
+                self._fp,
+                ft.OutlinedButton("Підключити вручну", on_click=self._pair_manual),
+                self._status,
             ],
+            scroll=ft.ScrollMode.AUTO, spacing=12,
         )
+        # відступ зверху через padding (SafeArea давав сірий екран); top=60 —
+        # запас під камеру/статус-бар
+        self.padding = ft.Padding(left=20, top=60, right=20, bottom=20)
+        self.content = col
 
-        header = ft.Column([
-            ft.Icon(ft.Icons.PHONELINK_LOCK, size=48, color=theme.ACCENT),
-            ft.Text("Підключення до ПК", size=22, weight=ft.FontWeight.BOLD, color=theme.TEXT),
-            ft.Text("Відкрий на ПК: Панель → Пристрої. Відскануй QR або встав його код сюди.",
-                    size=13, color=theme.TEXT_DIM, text_align=ft.TextAlign.CENTER),
-        ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=8)
+        if self._prefill:
+            self._pair_from_code(None)
 
-        cancel = []
-        if self.on_cancel:
-            cancel = [ft.TextButton("Назад", on_click=lambda _: self.on_cancel())]
+    def _set_status(self, msg, color=None):
+        self._status.value = msg
+        self._status.color = color or theme.TEXT_DIM
+        try:
+            self._pg.update()
+        except Exception:
+            pass
 
-        # SafeArea — відступ від камери/статус-бару зверху
-        self.content = ft.SafeArea(
-            top=True, bottom=True, expand=True,
-            content=ft.Container(
-                content=ft.Column(
-                    [header, ft.Container(height=8),
-                     theme.card(ft.Column([self._name, self._code, paste_btn, self._progress],
-                                          spacing=12)),
-                     manual, *cancel],
-                    spacing=14, scroll=ft.ScrollMode.AUTO,
-                ),
-                padding=22, expand=True,
-            ),
-        )
-
-    # ------------------------------------------------------------ дії
     def _do_pair(self, host, port, tls, pin, fp, name):
-        self._progress.visible = True
-        self._pg.update()
+        self._set_status("Підключення…", theme.WARN)
 
         def work():
             try:
                 result = api_client.pair(host, int(port), tls, pin, name, fp)
                 token = result["token"]
                 real_fp = result.get("fingerprint", fp) or fp
-                pc = self.storage.add_pc(
-                    name=name, host=host, port=int(port), tls=tls,
-                    token=token, fingerprint=real_fp,
-                )
-                self._toast(f"Підключено: {name}")
+                pc = self.storage.add_pc(name=name, host=host, port=int(port),
+                                         tls=tls, token=token, fingerprint=real_fp)
+                self._set_status("Підключено!", theme.OK)
                 self.on_paired(pc)
             except api_client.PinMismatch:
-                self._toast("Відбиток сертифіката не збігся — можливий MITM!", error=True)
+                self._set_status("Відбиток не збігся — можливий MITM!", theme.DANGER)
             except Exception as e:
-                self._toast(str(e), error=True)
-            finally:
-                self._progress.visible = False
-                self._pg.update()
+                self._set_status(str(e)[:120], theme.DANGER)
 
-        run_in_thread(self._pg, work)
+        self._pg.run_thread(work)
 
     def _pair_from_code(self, _):
         try:
             data = pairing.parse_qr(self._code.value or "")
         except ValueError as e:
-            self._toast(str(e), error=True)
+            self._set_status(str(e), theme.DANGER)
             return
         self._do_pair(data.host, data.port, data.tls, data.pin, data.fingerprint,
                       self._name.value or "Мій телефон")
@@ -143,12 +117,7 @@ class PairScreen(ft.Container):
     def _pair_manual(self, _):
         host = (self._host.value or "").strip()
         if not host:
-            self._toast("Вкажи адресу ПК", error=True)
+            self._set_status("Вкажи адресу ПК", theme.DANGER)
             return
-        self._do_pair(host, self._port.value or "5050", True,
-                      (self._pin.value or "").strip(), (self._fp.value or "").strip(),
-                      self._name.value or "Мій телефон")
-
-    def _scan_camera(self, _):
-        """Заготовка під нативний сканер камери (платформний плагін)."""
-        self._toast("Сканування камерою буде додано; поки встав код.", error=False)
+        self._do_pair(host, 5050, True, (self._pin.value or "").strip(),
+                      (self._fp.value or "").strip(), self._name.value or "Мій телефон")

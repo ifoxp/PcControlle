@@ -29,8 +29,8 @@ class GridScreen(ft.Container):
         self._align = "center"
 
         self._status = ft.Text("", size=12, color=theme.TEXT_DIM)
-        self._grid = ft.GridView(spacing=12, run_spacing=12, padding=14)
-        self._grid_wrap = ft.Column([self._grid], expand=True)
+        self._grid = ft.GridView(spacing=12, run_spacing=12, padding=14,
+                                 runs_count=4, expand=True)
         self._build()
         self._apply_grid_config()
         # кеш можна показати одразу (без мережі/потоків)
@@ -79,30 +79,14 @@ class GridScreen(ft.Container):
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
             padding=theme.pad_only(left=18, right=8, top=8, bottom=4),
         )
-        self.content = ft.Column([header, self._grid_wrap], spacing=0, expand=True)
+        self.content = ft.Column([header, self._grid], spacing=0, expand=True)
 
     def _apply_grid_config(self) -> None:
+        # проста надійна сітка: лише к-ть колонок (вирівнювання через пружини
+        # ламало рендер на Flet-Android; повернемо пізніше безпечним способом)
         s = self.storage.get_settings()
-        self._grid.runs_count = s["columns"]
-        self._align = s["align"]
-        # вирівнювання сітки в межах доступної висоти:
-        # top → сітка не розтягується (пружина знизу); center → пружини з обох боків;
-        # bottom → пружина зверху. Реалізуємо через expand у grid_wrap.
-        expand_grid = self._align == "top"   # top: сітка тягнеться зверху вниз
-        self._grid.expand = expand_grid
-        self._rebuild_wrap()
-
-    def _rebuild_wrap(self) -> None:
-        spacer_top = self._align in ("center", "bottom")
-        spacer_bot = self._align in ("center", "top")
-        controls = []
-        if spacer_top:
-            controls.append(ft.Container(expand=True))
-        controls.append(self._grid if self._align == "top" else
-                        ft.Container(content=self._grid))
-        if spacer_bot and self._align != "top":
-            controls.append(ft.Container(expand=True))
-        self._grid_wrap.controls = controls
+        self._grid.runs_count = int(s.get("columns", 4))
+        self._align = s.get("align", "center")
 
     def apply_settings(self) -> None:
         """Перезастосувати налаштування вигляду (після зміни в Налаштуваннях)."""

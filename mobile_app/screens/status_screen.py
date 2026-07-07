@@ -56,13 +56,11 @@ class StatusScreen(ft.Container):
 
         header = ft.Text("Стан", size=22, weight=ft.FontWeight.BOLD, color=theme.TEXT)
 
-        self.content = ft.SafeArea(
-            top=True, bottom=False, expand=True,
-            content=ft.Container(
-                content=ft.Column([header, pc_card, actions],
-                                  spacing=16, scroll=ft.ScrollMode.AUTO),
-                padding=18, expand=True,
-            ),
+        # без вкладеної SafeArea (MainShell уже дає одну)
+        self.content = ft.Container(
+            content=ft.Column([header, pc_card, actions],
+                              spacing=16, scroll=ft.ScrollMode.AUTO),
+            padding=18, expand=True,
         )
 
     def _do_refresh(self):

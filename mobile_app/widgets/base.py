@@ -71,12 +71,12 @@ def grid_tile(cmd: dict, on_tap: Callable, *, busy_ref: dict | None = None) -> f
     container = ft.Container(
         content=inner,
         bgcolor=theme.SURFACE,
-        border=theme.border_all(1, theme.DANGER + "55" if dangerous else theme.BORDER),
+        # без 8-значного hex з альфою (ламав рендер на Android) і без aspect_ratio
+        border=theme.border_all(1, theme.DANGER if dangerous else theme.BORDER),
         border_radius=theme.RADIUS,
         padding=theme.pad(h=8, v=14),
         ink=True,
         on_click=lambda e: on_tap(),
-        aspect_ratio=1.0,
     )
 
     # дозволяємо віджету керувати індикатором зайнятості

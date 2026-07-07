@@ -54,9 +54,10 @@ class PcsScreen(ft.Container):
                           tooltip="Підключити новий", on_click=lambda _: self.on_add()),
         ])
 
+        # відступ зверху через padding (SafeArea давав сірий екран)
         self.content = ft.Container(
             content=ft.Column([header, *rows], spacing=12, scroll=ft.ScrollMode.AUTO),
-            padding=18, expand=True,
+            padding=ft.Padding(left=18, top=55, right=18, bottom=18), expand=True,
         )
 
     def _select(self, pc_id: str) -> None:

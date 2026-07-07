@@ -87,11 +87,9 @@ class SettingsScreen(ft.Container):
 
         header = ft.Text("Вигляд", size=22, weight=ft.FontWeight.BOLD, color=theme.TEXT)
 
-        self.content = ft.SafeArea(
-            top=True, bottom=False, expand=True,
-            content=ft.Container(
-                content=ft.Column([header, cols_card, align_card, confirm_card],
-                                  spacing=14, scroll=ft.ScrollMode.AUTO),
-                padding=18, expand=True,
-            ),
+        # без вкладеної SafeArea (MainShell уже дає одну; вкладені ламали рендер)
+        self.content = ft.Container(
+            content=ft.Column([header, cols_card, align_card, confirm_card],
+                              spacing=14, scroll=ft.ScrollMode.AUTO),
+            padding=18, expand=True,
         )
