@@ -526,13 +526,25 @@ class VolumeManager:
         REGISTRY.register(SVC_VOLUME, "Керування гучністю")
         REGISTRY.update(SVC_VOLUME, state=State.IDLE, detail="Запуск...")
         logger.info("VolumeManager демон запущений.")
+        err_streak = 0
         while True:
             try:
                 self.tick()
+                err_streak = 0
             except Exception as e:
+                err_streak += 1
                 logger.error("VolumeManager tick error: %s", e)
                 REGISTRY.update(SVC_VOLUME, state=State.ERROR, detail=str(e))
-                self._master_if = None  # протух інтерфейс — пересоздамо наступного тіку
+                self._master_if = None  # протух інтерфейс — пересоздамо
+                # аудіопристрій міг змінитись (DEVICE_INVALIDATED). Перестворюємо
+                # COM-apartment і робимо backoff, щоб НЕ довбати нативний pycaw
+                # щотіку — саме це спричиняло нативні краші процесу.
+                try:
+                    ctypes.windll.ole32.CoUninitialize()
+                    ctypes.windll.ole32.CoInitialize(None)
+                except Exception:
+                    pass
+                time.sleep(min(2.0, 0.3 * err_streak))  # зростаюча пауза до 2с
             time.sleep(FAST_INTERVAL)
 
 

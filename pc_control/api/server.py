@@ -194,6 +194,45 @@ def create_app() -> Flask:
         except Exception as e:
             return f"Error: {e}", 500
 
+    @app.get("/set_clipboard")
+    @require_device
+    def set_clipboard():
+        """Кладе переданий текст у буфер обміну ПК (з телефона)."""
+        text = request.args.get("text", "")
+        if not text:
+            return "Error: text is empty", 400
+        try:
+            import ctypes
+            from ctypes import c_void_p, c_size_t, c_wchar_p
+            CF_UNICODETEXT = 13
+            GMEM_MOVEABLE = 0x0002
+            k32, u32 = ctypes.windll.kernel32, ctypes.windll.user32
+            # ВАЖЛИВО на 64-біт: без restype=c_void_p хендли обрізаються до 32 біт
+            # → access violation. Задаємо типи явно.
+            k32.GlobalAlloc.restype = c_void_p
+            k32.GlobalAlloc.argtypes = [ctypes.c_uint, c_size_t]
+            k32.GlobalLock.restype = c_void_p
+            k32.GlobalLock.argtypes = [c_void_p]
+            k32.GlobalUnlock.argtypes = [c_void_p]
+            u32.SetClipboardData.restype = c_void_p
+            u32.SetClipboardData.argtypes = [ctypes.c_uint, c_void_p]
+
+            data = text.encode("utf-16-le") + b"\x00\x00"
+            handle = k32.GlobalAlloc(GMEM_MOVEABLE, len(data))
+            ptr = k32.GlobalLock(handle)
+            ctypes.memmove(ptr, data, len(data))
+            k32.GlobalUnlock(handle)
+            u32.OpenClipboard(0)
+            u32.EmptyClipboard()
+            u32.SetClipboardData(CF_UNICODETEXT, handle)
+            u32.CloseClipboard()
+            REGISTRY.update(SVC_API, detail="Отримано текст у буфер", touch=True)
+            logger.info("Clipboard set from phone (%d chars)", len(text))
+            return f"Скопійовано в буфер ПК ({len(text)} символів)"
+        except Exception as e:
+            logger.error("set_clipboard error: %s", e)
+            return f"Error: {e}", 500
+
     @app.get("/sorter/run")
     @require_device
     def sorter_run():

@@ -31,10 +31,11 @@
 from __future__ import annotations
 
 # Версія маніфесту: телефон порівнює й перемальовує сітку, коли змінилась.
-MANIFEST_VERSION = 1
+MANIFEST_VERSION = 2
 
 # Дозволені типи віджетів (для валідації й документації)
-WIDGETS = {"button", "toggle", "slider", "media_view", "audio", "text_input", "picker"}
+WIDGETS = {"button", "toggle", "slider", "media_view", "audio", "text_input",
+           "picker", "url_clipboard", "push_clipboard"}
 
 
 # Порядок = порядок появи в сітці на телефоні.
@@ -94,23 +95,20 @@ COMMANDS: list[dict] = [
 
     # --- Браузер ---
     {
+        # widget "url_clipboard": одразу бере посилання з буфера телефона й відкриває
         "id": "open_url", "title": "Відкрити URL", "icon": "open_in_browser",
-        "widget": "text_input", "method": "GET", "path": "/open_url",
+        "widget": "url_clipboard", "method": "GET", "path": "/open_url",
         "dangerous": False, "response": "text", "group": "Браузер",
-        "params": {"name": "url", "label": "Адреса (http/https)",
-                   "kind": "text", "default": "https://"},
+        "params": {"name": "url"},
     },
 
-    # --- Сортувальник ---
+    # --- Буфер обміну ---
     {
-        "id": "sorter_run", "title": "Аналіз фото", "icon": "auto_awesome",
-        "widget": "button", "method": "GET", "path": "/sorter/run",
-        "dangerous": False, "response": "text", "group": "Сортувальник",
-    },
-    {
-        "id": "sorter_status", "title": "Стан сортув.", "icon": "info",
-        "widget": "button", "method": "GET", "path": "/sorter/status",
-        "dangerous": False, "response": "json", "group": "Сортувальник",
+        # widget "push_clipboard": бере текст із буфера телефона й кладе в буфер ПК
+        "id": "push_clipboard", "title": "Буфер → ПК", "icon": "content_paste_go",
+        "widget": "push_clipboard", "method": "GET", "path": "/set_clipboard",
+        "dangerous": False, "response": "text", "group": "Буфер",
+        "params": {"name": "text"},
     },
 
     # --- ЗАГОТОВКИ під майбутнє (телефон уже вміє ці віджети) ---

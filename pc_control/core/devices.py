@@ -116,9 +116,14 @@ def pair_new_device(name: str, ip: str = "?") -> str:
     }
     with _lock:
         data = _load()
+        # дедуплікація: той самий пристрій (за назвою+IP) не плодимо — замінюємо
+        data["devices"] = [
+            d for d in data["devices"]
+            if not (d.get("name") == device["name"] and d.get("last_ip") == ip)
+        ]
         data["devices"].append(device)
         _save(data)
-    logger.info("Спаровано новий пристрій: %s (%s)", device["name"], device["id"])
+    logger.info("Спаровано пристрій: %s (%s)", device["name"], device["id"])
     return token
 
 
