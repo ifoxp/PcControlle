@@ -54,7 +54,7 @@ def _run_with_confirm(cmd: dict, ctx: WidgetContext, busy: dict,
 # ---------------------------------------------------------------- button
 def build_button_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
     busy: dict = {}
-    tile = grid_tile(cmd, lambda: _run_with_confirm(cmd, ctx, busy), busy_ref=busy, on_long_press=ctx.on_edit)
+    tile = grid_tile(cmd, lambda: _run_with_confirm(cmd, ctx, busy), busy_ref=busy, on_long_press=ctx.on_edit, columns=cmd.get("_columns", 4))
     return tile
 
 
@@ -62,7 +62,7 @@ def build_button_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
 def build_toggle_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
     # toggle шле той самий запит (сервер сам перемикає стан, напр. монітори/пауза)
     busy: dict = {}
-    return grid_tile(cmd, lambda: _run_with_confirm(cmd, ctx, busy), busy_ref=busy, on_long_press=ctx.on_edit)
+    return grid_tile(cmd, lambda: _run_with_confirm(cmd, ctx, busy), busy_ref=busy, on_long_press=ctx.on_edit, columns=cmd.get("_columns", 4))
 
 
 # ---------------------------------------------------------------- text_input
@@ -95,7 +95,7 @@ def build_text_input_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
         )
         theme.show(ctx.page, sheet)
 
-    return grid_tile(cmd, open_input, busy_ref=busy, on_long_press=ctx.on_edit)
+    return grid_tile(cmd, open_input, busy_ref=busy, on_long_press=ctx.on_edit, columns=cmd.get("_columns", 4))
 
 
 # ---------------------------------------------------------------- picker
@@ -125,7 +125,7 @@ def build_picker_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
         )
         theme.show(ctx.page, sheet)
 
-    return grid_tile(cmd, open_picker, busy_ref=busy, on_long_press=ctx.on_edit)
+    return grid_tile(cmd, open_picker, busy_ref=busy, on_long_press=ctx.on_edit, columns=cmd.get("_columns", 4))
 
 
 # ---------------------------------------------------------------- audio
@@ -148,7 +148,7 @@ def build_audio_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
                 ctx.page.update()
         ctx.run_async(work)
 
-    return grid_tile(cmd, fetch_and_play, busy_ref=busy, on_long_press=ctx.on_edit)
+    return grid_tile(cmd, fetch_and_play, busy_ref=busy, on_long_press=ctx.on_edit, columns=cmd.get("_columns", 4))
 
 
 def _read_clipboard(ctx: WidgetContext) -> str:
@@ -189,7 +189,7 @@ def build_url_clipboard_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
                 set_busy(busy, False); ctx.page.update()
         ctx.run_async(work)
 
-    return grid_tile(cmd, go, busy_ref=busy, on_long_press=ctx.on_edit)
+    return grid_tile(cmd, go, busy_ref=busy, on_long_press=ctx.on_edit, columns=cmd.get("_columns", 4))
 
 
 # ------------------------------------------------- push_clipboard (#10)
@@ -214,4 +214,4 @@ def build_push_clipboard_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
                 set_busy(busy, False); ctx.page.update()
         ctx.run_async(work)
 
-    return grid_tile(cmd, go, busy_ref=busy, on_long_press=ctx.on_edit)
+    return grid_tile(cmd, go, busy_ref=busy, on_long_press=ctx.on_edit, columns=cmd.get("_columns", 4))

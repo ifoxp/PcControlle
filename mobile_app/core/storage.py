@@ -139,6 +139,17 @@ class Storage:
         ov.update({k: v for k, v in fields.items() if v is not None})
         self._write(data)
 
+    def swap_commands(self, id_a: str, id_b: str, all_ids: list[str]) -> None:
+        """Ставить id_a на позицію id_b (перетягування), зсуваючи решту."""
+        overrides = self._read().get("cmd_overrides", {})
+        order = sorted(all_ids, key=lambda i: overrides.get(i, {}).get("order", all_ids.index(i)))
+        if id_a not in order or id_b not in order:
+            return
+        order.remove(id_a)
+        order.insert(order.index(id_b), id_a)
+        for pos, cid in enumerate(order):
+            self.set_cmd_override(cid, order=pos)
+
     def move_command(self, cmd_id: str, all_ids: list[str], direction: int) -> None:
         """Переміщує команду в порядку (direction: -1 вгору, +1 вниз)."""
         # поточний порядок (з override або дефолтний за all_ids)

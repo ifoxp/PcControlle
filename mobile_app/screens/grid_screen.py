@@ -54,6 +54,7 @@ class GridScreen(ft.Container):
             toast=self._toast,
             open_sheet=lambda c: theme.show(self._pg, c),
             confirm_dangerous=self.storage.get_settings()["confirm_dangerous"],
+            columns=int(self.storage.get_settings().get("columns", 4)),
         )
 
     def _toast(self, msg: str, error: bool = False) -> None:
@@ -67,12 +68,19 @@ class GridScreen(ft.Container):
         pc = self.storage.get_active()
         name = pc["name"] if pc else "—"
 
+        reorder_btn = ft.IconButton(
+            ft.Icons.CHECK if getattr(self, "_reorder_mode", False) else ft.Icons.SWAP_HORIZ,
+            icon_color=theme.OK if getattr(self, "_reorder_mode", False) else theme.TEXT_DIM,
+            tooltip="Режим переміщення іконок",
+            on_click=lambda _: self._toggle_reorder(),
+        )
         header = ft.Container(
             content=ft.Row([
                 ft.Column([
                     ft.Text(name, size=18, weight=ft.FontWeight.BOLD, color=theme.TEXT),
                     self._status,
                 ], spacing=1, expand=True),
+                reorder_btn,
                 ft.IconButton(ft.Icons.REFRESH, icon_color=theme.ACCENT,
                               tooltip="Оновити команди",
                               on_click=lambda _: self.load_manifest(force=True)),
@@ -104,10 +112,47 @@ class GridScreen(ft.Container):
         self._safe_update()
 
     # ------------------------------------------------------------ дані
+    def _toggle_reorder(self) -> None:
+        self._reorder_mode = not getattr(self, "_reorder_mode", False)
+        self._build()
+        self._apply_grid_config()
+        m = self._cached_manifest()
+        if m:
+            self._grid.controls = self._tiles_from(m)
+        self._safe_update()
+
     def _tiles_from(self, manifest: dict) -> list:
         ctx = self._ctx()
         cmds = self.storage.apply_overrides(manifest.get("commands", []))
+        self._ordered_ids = [c["id"] for c in cmds]
+        if getattr(self, "_reorder_mode", False):
+            return [self._draggable_tile(c, ctx) for c in cmds]
         return [build_tile(c, ctx, on_edit=lambda cmd: self._edit_cmd(cmd)) for c in cmds]
+
+    def _draggable_tile(self, cmd: dict, ctx) -> ft.Control:
+        """Плитка в режимі переміщення: Draggable + DragTarget (перетягування)."""
+        cid = cmd["id"]
+        tile = build_tile(cmd, ctx)  # тапи в drag-режимі ігноруються
+
+        def on_accept(e):
+            dragged = getattr(self, "_dragging_id", None)
+            if dragged and dragged != cid:
+                self.storage.swap_commands(dragged, cid, self._ordered_ids)
+                m = self._cached_manifest()
+                if m:
+                    self._grid.controls = self._tiles_from(m)
+                self._safe_update()
+
+        return ft.DragTarget(
+            group="cmds",
+            on_accept=on_accept,
+            content=ft.Draggable(
+                group="cmds",
+                content=ft.Container(content=tile, opacity=1.0),
+                content_when_dragging=ft.Container(content=tile, opacity=0.3),
+                on_drag_start=lambda e, c=cid: setattr(self, "_dragging_id", c),
+            ),
+        )
 
     def _edit_cmd(self, cmd: dict) -> None:
         """Редактор іконки (довге натискання): назва, колір, підтвердження, сховати."""

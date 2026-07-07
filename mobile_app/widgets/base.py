@@ -23,6 +23,7 @@ class WidgetContext:
     open_sheet: Callable           # open_sheet(control) — модальний лист (для медіа/слайдера)
     confirm_dangerous: bool = True # чи питати підтвердження перед небезпечними діями
     on_edit: Callable | None = None  # довге натискання на плитку → редактор
+    columns: int = 4               # к-ть колонок сітки (для адаптивних розмірів)
 
 
 def icon_for(name: str) -> str:
@@ -47,29 +48,35 @@ def run_in_thread(page: ft.Page, fn: Callable) -> None:
 
 
 def grid_tile(cmd: dict, on_tap: Callable, *, busy_ref: dict | None = None,
-              on_long_press: Callable | None = None) -> ft.Control:
+              on_long_press: Callable | None = None, columns: int = 4) -> ft.Control:
     """
     Стандартна плитка сітки: іконка зверху, підпис знизу, тап → on_tap,
-    довге натискання → on_long_press (редактор). Небезпечні — червона рамка.
-    Колір іконки — user_color (якщо заданий), інакше акцент/danger.
+    довге натискання → on_long_press. Розміри АДАПТИВНІ до к-ті колонок
+    (при 6 колонках плитки менші — зменшуємо іконку/текст/відступи).
     """
     dangerous = bool(cmd.get("dangerous"))
     user_color = cmd.get("user_color")
     accent = user_color or (theme.DANGER if dangerous else theme.ACCENT)
 
-    icon = ft.Icon(icon_for(cmd.get("icon", "")), size=30, color=accent)
+    # адаптивні розміри: 2 кол → великі, 6 кол → компактні
+    icon_size = max(18, 40 - columns * 3)      # 2→34, 4→28, 6→22
+    text_size = max(9, 15 - columns)           # 2→13, 4→11, 6→9
+    pad_v = max(6, 16 - columns * 2)           # 2→12, 4→8, 6→4
+    max_lines = 1 if columns >= 5 else 2
+
+    icon = ft.Icon(icon_for(cmd.get("icon", "")), size=icon_size, color=accent)
     label = ft.Text(
         cmd.get("title", cmd.get("id", "")),
-        size=12, color=theme.TEXT, text_align=ft.TextAlign.CENTER,
-        max_lines=2, overflow=ft.TextOverflow.ELLIPSIS,
+        size=text_size, color=theme.TEXT, text_align=ft.TextAlign.CENTER,
+        max_lines=max_lines, overflow=ft.TextOverflow.ELLIPSIS,
     )
-    progress = ft.ProgressRing(width=18, height=18, visible=False, color=accent)
+    progress = ft.ProgressRing(width=16, height=16, visible=False, color=accent)
 
     inner = ft.Column(
-        [ft.Container(height=4), icon, progress, label],
+        [icon, progress, label],
         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
         alignment=ft.MainAxisAlignment.CENTER,
-        spacing=8,
+        spacing=max(3, 8 - columns),
     )
 
     container = ft.Container(
@@ -77,7 +84,7 @@ def grid_tile(cmd: dict, on_tap: Callable, *, busy_ref: dict | None = None,
         bgcolor=theme.SURFACE,
         border=theme.border_all(1, theme.DANGER if dangerous else theme.BORDER),
         border_radius=theme.RADIUS,
-        padding=theme.pad(h=8, v=14),
+        padding=theme.pad(h=4, v=pad_v),
         ink=True,
         on_click=lambda e: on_tap(),
         on_long_press=(lambda e: on_long_press()) if on_long_press else None,

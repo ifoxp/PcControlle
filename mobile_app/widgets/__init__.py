@@ -47,6 +47,8 @@ def build_tile(cmd: dict, ctx: WidgetContext, on_edit=None) -> ft.Control:
     import dataclasses
     tile_ctx = dataclasses.replace(ctx)
     tile_ctx.on_edit = (lambda c=cmd: on_edit(c)) if on_edit else None
+    # покласти к-ть колонок у cmd, щоб grid_tile масштабувався
+    cmd = dict(cmd, _columns=ctx.columns)
     builder = _BUILDERS.get(cmd.get("widget", "button"))
     if builder is None:
         return build_button_tile(cmd, tile_ctx)

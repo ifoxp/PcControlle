@@ -13,7 +13,6 @@ media_view — перегляд фото (і аудіо) з можливістю
 
 from __future__ import annotations
 
-import base64
 import datetime
 import os
 import tempfile
@@ -77,25 +76,23 @@ def present_bytes(ctx: WidgetContext, data: bytes, *, kind: str, title: str) -> 
     надійніше за AlertDialog (той на Android не рендерив великий вміст).
     """
     page = ctx.page
+    # Flet 0.85 Image не має src_base64 — зберігаємо файл і показуємо через src=шлях
+    suffix = ".png" if kind == "image" else ".wav"
+    tmp_path = _save_temp(data, suffix)
+
     if kind == "image":
-        suffix = ".png"
-        b64 = base64.b64encode(data).decode()
         body = ft.InteractiveViewer(
             min_scale=0.8, max_scale=6.0,
-            content=ft.Image(src_base64=b64, fit=ft.BoxFit.CONTAIN),
+            content=ft.Image(src=tmp_path, fit=ft.BoxFit.CONTAIN),
             expand=True,
         )
     else:
-        suffix = ".wav"
-        b64 = base64.b64encode(data).decode()
         body = ft.Column(
             [ft.Icon(ft.Icons.AUDIOTRACK, size=64, color=theme.ACCENT),
-             ft.Audio(src_base64=b64, autoplay=True)],
+             ft.Audio(src=tmp_path, autoplay=True)],
             horizontal_alignment=ft.CrossAxisAlignment.CENTER, expand=True,
             alignment=ft.MainAxisAlignment.CENTER,
         )
-
-    tmp_path = _save_temp(data, suffix)
 
     def close(_=None):
         try:
@@ -144,4 +141,4 @@ def build_media_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
                 ctx.page.update()
         ctx.run_async(work)
 
-    return grid_tile(cmd, fetch, busy_ref=busy, on_long_press=ctx.on_edit)
+    return grid_tile(cmd, fetch, busy_ref=busy, on_long_press=ctx.on_edit, columns=cmd.get("_columns", 4))

@@ -11,9 +11,14 @@ import flet as ft
 
 import theme
 
+# Палітра 36 кольорів (Material-подібна)
 _COLORS = [
-    ("Акцент", theme.ACCENT), ("Червоний", theme.DANGER), ("Зелений", theme.OK),
-    ("Жовтий", theme.WARN), ("Білий", theme.TEXT), ("Сірий", theme.TEXT_DIM),
+    "#4c8dff", "#2979ff", "#1565c0", "#00b0ff", "#00bcd4", "#009688",
+    "#22c55e", "#4caf50", "#8bc34a", "#cddc39", "#ffeb3b", "#ffc107",
+    "#ff9800", "#ff5722", "#f44336", "#ef4444", "#e91e63", "#ff4081",
+    "#9c27b0", "#673ab7", "#7c4dff", "#3f51b5", "#795548", "#607d8b",
+    "#ffffff", "#e0e0e0", "#9e9e9e", "#616161", "#424242", "#000000",
+    "#ff6b6b", "#feca57", "#48dbfb", "#1dd1a1", "#f368e0", "#ff9ff3",
 ]
 
 
@@ -30,12 +35,11 @@ def open_command_editor(page, storage, cmd: dict, on_saved) -> None:
     def _refresh():
         swatches.controls = [
             ft.Container(
-                width=40, height=40, bgcolor=c, border_radius=20,
+                width=38, height=38, bgcolor=c, border_radius=19,
                 border=theme.border_all(3, theme.TEXT if selected["color"] == c else theme.BORDER),
                 on_click=lambda e, cc=c: (_set_color(cc)),
-                tooltip=label,
             )
-            for label, c in _COLORS
+            for c in _COLORS
         ]
         page.update()
 
