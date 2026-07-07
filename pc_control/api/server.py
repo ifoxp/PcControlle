@@ -233,6 +233,52 @@ def create_app() -> Flask:
             logger.error("set_clipboard error: %s", e)
             return f"Error: {e}", 500
 
+    @app.route("/set_clipboard_image", methods=["GET", "POST"])
+    @require_device
+    def set_clipboard_image():
+        """Кладе зображення (base64 із телефона) у буфер обміну ПК як DIB."""
+        b64 = request.values.get("img", "")
+        if not b64:
+            return "Error: no image", 400
+        try:
+            import base64 as _b64
+            import io
+            from PIL import Image
+            raw = _b64.b64decode(b64)
+            img = Image.open(io.BytesIO(raw)).convert("RGB")
+            # у буфер Windows зображення кладеться як DIB (BMP без 14-байт заголовка)
+            out = io.BytesIO()
+            img.save(out, "BMP")
+            dib = out.getvalue()[14:]
+
+            import ctypes
+            from ctypes import c_void_p, c_size_t
+            CF_DIB = 8
+            GMEM_MOVEABLE = 0x0002
+            k32, u32 = ctypes.windll.kernel32, ctypes.windll.user32
+            k32.GlobalAlloc.restype = c_void_p
+            k32.GlobalAlloc.argtypes = [ctypes.c_uint, c_size_t]
+            k32.GlobalLock.restype = c_void_p
+            k32.GlobalLock.argtypes = [c_void_p]
+            k32.GlobalUnlock.argtypes = [c_void_p]
+            u32.SetClipboardData.restype = c_void_p
+            u32.SetClipboardData.argtypes = [ctypes.c_uint, c_void_p]
+
+            handle = k32.GlobalAlloc(GMEM_MOVEABLE, len(dib))
+            ptr = k32.GlobalLock(handle)
+            ctypes.memmove(ptr, dib, len(dib))
+            k32.GlobalUnlock(handle)
+            u32.OpenClipboard(0)
+            u32.EmptyClipboard()
+            u32.SetClipboardData(CF_DIB, handle)
+            u32.CloseClipboard()
+            REGISTRY.update(SVC_API, detail="Отримано зображення у буфер", touch=True)
+            logger.info("Clipboard image set from phone (%d bytes)", len(raw))
+            return "Зображення в буфері ПК"
+        except Exception as e:
+            logger.error("set_clipboard_image error: %s", e)
+            return f"Error: {e}", 500
+
     @app.get("/sorter/run")
     @require_device
     def sorter_run():
