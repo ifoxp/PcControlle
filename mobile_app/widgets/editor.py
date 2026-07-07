@@ -19,6 +19,7 @@ _COLORS = [
     "#9c27b0", "#673ab7", "#7c4dff", "#3f51b5", "#795548", "#607d8b",
     "#ffffff", "#e0e0e0", "#9e9e9e", "#616161", "#424242", "#000000",
     "#ff6b6b", "#feca57", "#48dbfb", "#1dd1a1", "#f368e0", "#ff9ff3",
+    "#54a0ff", "#5f27cd", "#01a3a4", "#ee5253",
 ]
 
 
@@ -51,6 +52,8 @@ def open_command_editor(page, storage, cmd: dict, on_saved) -> None:
         try:
             if overlay in page.overlay:
                 page.overlay.remove(overlay)
+            if hasattr(page, "_back_stack") and close in page._back_stack:
+                page._back_stack.remove(close)
             page.update()
         except Exception:
             pass
@@ -110,5 +113,7 @@ def open_command_editor(page, storage, cmd: dict, on_saved) -> None:
         content=content,
     )
     page.overlay.append(overlay)
+    if hasattr(page, "_back_stack"):
+        page._back_stack.append(close)
     page.update()
     _refresh()

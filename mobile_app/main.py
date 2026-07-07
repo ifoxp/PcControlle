@@ -53,6 +53,25 @@ def main(page: "ft.Page"):
     except Exception:
         pass
 
+    # back-стек: коли відкрито overlay (скрін/редактор), системний «назад» його
+    # закриває, а не вбиває додаток. Реєстрація — page._back_stack (список callable).
+    page._back_stack = []
+
+    def _on_keyboard(e):
+        # Android «назад» приходить сюди як спец-клавіша
+        key = (getattr(e, "key", "") or "").lower()
+        if key in ("escape", "browser back", "go back", "back"):
+            if page._back_stack:
+                cb = page._back_stack.pop()
+                try:
+                    cb()
+                except Exception:
+                    pass
+    try:
+        page.on_keyboard_event = _on_keyboard
+    except Exception:
+        pass
+
     # 2) сховище — синхронно, без flet storage_paths (той await вішав старт)
     try:
         import os
@@ -180,10 +199,20 @@ class _MainShell(ft.Container):
         if idx == 0:
             self._body.content = self.grid
         elif idx == 1:
+            # перебудувати налаштування (щоб список іконок був свіжий)
+            try:
+                self.settings._build()
+            except Exception:
+                pass
             self._body.content = self.settings
         else:
             self.status.refresh()
             self._body.content = self.status
+        # оновлюємо і сам body, і сторінку (Flet 0.85 не завжди чіпляє вкладене)
+        try:
+            self._body.update()
+        except Exception:
+            pass
         self._pg.update()
 
     def _on_settings_changed(self):

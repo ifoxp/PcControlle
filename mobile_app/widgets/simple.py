@@ -192,9 +192,26 @@ def build_url_clipboard_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
     return grid_tile(cmd, go, busy_ref=busy, on_long_press=ctx.on_edit, columns=cmd.get("_columns", 4))
 
 
-# ------------------------------------------------- push_clipboard (#10)
+def _read_clipboard_image(ctx: WidgetContext) -> bytes | None:
+    """Читає ЗОБРАЖЕННЯ з буфера телефона (напр. свіжий скрін)."""
+    async def _get():
+        try:
+            return await ctx.page.clipboard.get_image()
+        except Exception:
+            return None
+    try:
+        fut = ctx.page.run_task(_get)
+        return fut.result(timeout=5)
+    except Exception:
+        return None
+
+
+# ------------------------------------------------- push_clipboard (#10, #7)
 def build_push_clipboard_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
-    """Бере текст із буфера телефона й кладе в буфер обміну ПК."""
+    """
+    Бере вміст буфера телефона й кладе в буфер ПК. Якщо в буфері ЗОБРАЖЕННЯ
+    (напр. щойно зроблений скрін) — передає картинку; інакше — текст.
+    """
     busy: dict = {}
     field = cmd.get("params", {}).get("name", "text")
 
@@ -202,6 +219,20 @@ def build_push_clipboard_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
         def work():
             set_busy(busy, True); ctx.page.update()
             try:
+                # 1) спробувати зображення (скрін у буфері) — #7
+                img = _read_clipboard_image(ctx)
+                if img:
+                    import base64
+                    b64 = base64.b64encode(img).decode()
+                    resp = ctx.client.request(
+                        "POST", "/set_clipboard_image",
+                        params=None) if False else None
+                    # шлемо base64 як параметр (простіше за multipart)
+                    resp = ctx.client.get_text("/set_clipboard_image", {"img": b64}) \
+                        if len(b64) < 6000 else _post_image(ctx, b64)
+                    ctx.toast("Зображення → буфер ПК ✓")
+                    return
+                # 2) інакше текст — #10
                 text = _read_clipboard(ctx)
                 if not text:
                     ctx.toast("Буфер телефона порожній", error=True)
@@ -215,3 +246,17 @@ def build_push_clipboard_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
         ctx.run_async(work)
 
     return grid_tile(cmd, go, busy_ref=busy, on_long_press=ctx.on_edit, columns=cmd.get("_columns", 4))
+
+
+def _post_image(ctx: WidgetContext, b64: str) -> str:
+    """Великий base64 — через POST-тіло."""
+    import httpx
+    pc = ctx.client.pc
+    scheme = "https" if pc.get("tls", True) else "http"
+    url = f"{scheme}://{pc['host']}:{pc['port']}/set_clipboard_image"
+    client = ctx.client._client()
+    try:
+        r = client.post(url, data={"img": b64}, headers=ctx.client._headers())
+        return r.text
+    finally:
+        client.close()

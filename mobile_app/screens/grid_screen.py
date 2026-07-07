@@ -130,11 +130,15 @@ class GridScreen(ft.Container):
         return [build_tile(c, ctx, on_edit=lambda cmd: self._edit_cmd(cmd)) for c in cmds]
 
     def _draggable_tile(self, cmd: dict, ctx) -> ft.Control:
-        """Плитка в режимі переміщення: Draggable + DragTarget (перетягування)."""
+        """Плитка в режимі переміщення: Draggable + DragTarget з підсвіткою цілі."""
         cid = cmd["id"]
         tile = build_tile(cmd, ctx)  # тапи в drag-режимі ігноруються
+        # обгортка, яка підсвічується коли на неї тягнуть (візуальна підказка #5)
+        highlight = ft.Container(content=tile, border_radius=theme.RADIUS,
+                                 border=theme.border_all(2, "#00000000"))
 
         def on_accept(e):
+            highlight.border = theme.border_all(2, "#00000000")
             dragged = getattr(self, "_dragging_id", None)
             if dragged and dragged != cid:
                 self.storage.swap_commands(dragged, cid, self._ordered_ids)
@@ -142,13 +146,25 @@ class GridScreen(ft.Container):
                 if m:
                     self._grid.controls = self._tiles_from(m)
                 self._safe_update()
+            else:
+                self._safe_update()
+
+        def on_will(e):
+            highlight.border = theme.border_all(2, theme.ACCENT)
+            self._safe_update()
+
+        def on_leave(e):
+            highlight.border = theme.border_all(2, "#00000000")
+            self._safe_update()
 
         return ft.DragTarget(
             group="cmds",
             on_accept=on_accept,
+            on_will_accept=on_will,
+            on_leave=on_leave,
             content=ft.Draggable(
                 group="cmds",
-                content=ft.Container(content=tile, opacity=1.0),
+                content=ft.Container(content=highlight, opacity=1.0),
                 content_when_dragging=ft.Container(content=tile, opacity=0.3),
                 on_drag_start=lambda e, c=cid: setattr(self, "_dragging_id", c),
             ),
