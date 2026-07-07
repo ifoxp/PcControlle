@@ -11,6 +11,9 @@ hiddenimports = (
     # безпека/мережа (крок 1-2)
     + collect_submodules('cryptography')
     + ['waitress', 'qrcode', 'qrcode.image.pil']
+    # яскравість моніторів
+    + collect_submodules('screen_brightness_control')
+    + ['wmi']
 )
 
 a = Analysis(

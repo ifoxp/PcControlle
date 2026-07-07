@@ -31,7 +31,7 @@
 from __future__ import annotations
 
 # Версія маніфесту: телефон порівнює й перемальовує сітку, коли змінилась.
-MANIFEST_VERSION = 2
+MANIFEST_VERSION = 3
 
 # Дозволені типи віджетів (для валідації й документації)
 WIDGETS = {"button", "toggle", "slider", "media_view", "audio", "text_input",
@@ -109,6 +109,26 @@ COMMANDS: list[dict] = [
         "widget": "push_clipboard", "method": "GET", "path": "/set_clipboard",
         "dangerous": False, "response": "text", "group": "Буфер",
         "params": {"name": "text"},
+    },
+
+    # --- НОВІ команди (перевірка динамічного підтягування) ---
+    {
+        "id": "lock", "title": "Заблокувати", "icon": "lock",
+        "widget": "button", "method": "GET", "path": "/lock",
+        "dangerous": True, "response": "text", "group": "Система",
+    },
+    {
+        "id": "media_playpause", "title": "Play / Pause", "icon": "play_arrow",
+        "widget": "button", "method": "GET", "path": "/media",
+        "dangerous": False, "response": "text", "group": "Медіа",
+        "fixed_params": {"action": "play_pause"},
+    },
+    {
+        "id": "brightness", "title": "Яскравість", "icon": "brightness_6",
+        "widget": "slider", "method": "GET", "path": "/brightness",
+        "dangerous": False, "response": "text", "group": "Екран",
+        "params": {"name": "level", "min": 0, "max": 100, "step": 5,
+                   "getter": {"path": "/brightness_get", "response": "number"}},
     },
 
     # --- ЗАГОТОВКИ під майбутнє (телефон уже вміє ці віджети) ---

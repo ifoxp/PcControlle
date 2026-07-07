@@ -15,3 +15,5 @@ waitress          # продакшн-WSGI сервер (замість app.run �
 cryptography      # генерація self-signed TLS-сертифіката
 qrcode[pil]       # QR-код парування на дашборді
 pillow            # ImageGrab (потокобезпечний скріншот) + QR-рендер
+screen_brightness_control  # яскравість моніторів (DDC/CI)
+wmi

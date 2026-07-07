@@ -69,8 +69,33 @@ def _get_volume_interface():
     return cast(interface, POINTER(IAudioEndpointVolume))
 
 
+def _brightness_cmd(*args) -> str | None:
+    """
+    Викликає яскравість у ОКРЕМОМУ ПРОЦЕСІ (сам себе з --brightness). Причина:
+    sbc (wmi/win32com) конфліктує з comtypes (pycaw) при COM-звільненні в одному
+    frozen-процесі → нативний краш усього EXE. Subprocess повністю ізолює COM.
+    Повертає stdout (число) або None при помилці/таймауті.
+    """
+    import subprocess
+    import sys
+    try:
+        if getattr(sys, "frozen", False):
+            cmd = [sys.executable, "--brightness", *args]
+        else:
+            cmd = [sys.executable, str(paths.BASE_DIR / "main.py"), "--brightness", *args]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15,
+                           creationflags=0x08000000)  # CREATE_NO_WINDOW
+        out = (r.stdout or "").strip()
+        return out or None
+    except Exception as e:
+        logger.error("brightness subprocess error: %s", e)
+        return None
+
+
 def create_app() -> Flask:
     app = Flask(__name__)
+    # дозволяємо великі тіла (скрін у base64 → буфер ПК; інакше 413 Payload Too Large)
+    app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024  # 64 МБ
     paths.ensure_dirs()
 
     @app.get("/")
@@ -147,7 +172,13 @@ def create_app() -> Flask:
             logger.info("Rejected unsafe URL: %r", url)
             return "Error: only http/https URLs are allowed", 400
         logger.info("Opening URL: %s", url)
-        webbrowser.open(url)
+        # os.startfile використовує асоціацію ОС → браузер ЗА ЗАМОВЧУВАННЯМ
+        # (webbrowser.open часто відкривав Edge незалежно від дефолту).
+        try:
+            import os
+            os.startfile(url)
+        except Exception:
+            webbrowser.open(url)
         REGISTRY.update(SVC_API, detail="Відкрито URL", touch=True)
         return "URL opened on PC!"
 
@@ -278,6 +309,57 @@ def create_app() -> Flask:
         except Exception as e:
             logger.error("set_clipboard_image error: %s", e)
             return f"Error: {e}", 500
+
+    @app.get("/lock")
+    @require_device(dangerous=True)
+    def lock_pc():
+        """Заблокувати ПК (екран блокування Windows)."""
+        try:
+            ctypes.windll.user32.LockWorkStation()
+            REGISTRY.update(SVC_API, detail="ПК заблоковано", touch=True)
+            return "ПК заблоковано"
+        except Exception as e:
+            return f"Error: {e}", 500
+
+    @app.get("/media")
+    @require_device
+    def media_key():
+        """Медіа-клавіші: play_pause / next / prev."""
+        action = request.args.get("action", "play_pause")
+        VK = {"play_pause": 0xB3, "next": 0xB0, "prev": 0xB1,
+              "stop": 0xB2, "mute": 0xAD}
+        vk = VK.get(action)
+        if vk is None:
+            return f"Unknown action. Available: {', '.join(VK)}", 400
+        try:
+            KEYEVENTF_KEYUP = 0x0002
+            ctypes.windll.user32.keybd_event(vk, 0, 0, 0)
+            ctypes.windll.user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
+            REGISTRY.update(SVC_API, detail=f"Медіа: {action}", touch=True)
+            return f"Media: {action}"
+        except Exception as e:
+            return f"Error: {e}", 500
+
+    @app.get("/brightness")
+    @require_device
+    def brightness_set():
+        """Яскравість монітора (DDC/CI через screen_brightness_control)."""
+        try:
+            level = int(request.args.get("level", ""))
+            level = max(0, min(100, level))
+        except ValueError:
+            return "Error: level must be 0-100", 400
+        result = _brightness_cmd("set", str(level))
+        if result is None:
+            return "Error: не вдалося змінити яскравість", 500
+        REGISTRY.update(SVC_API, detail=f"Яскравість {level}%", touch=True)
+        return f"Яскравість {level}%"
+
+    @app.get("/brightness_get")
+    @require_device
+    def brightness_get():
+        val = _brightness_cmd("get")
+        return str(val if val is not None else 50)
 
     @app.get("/sorter/run")
     @require_device

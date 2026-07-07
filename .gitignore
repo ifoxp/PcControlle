@@ -42,3 +42,7 @@ security_audit.log
 # Згенеровані іконки (можна перегенерувати: python tools/make_icon.py)
 # pc_control/assets/  — лишаємо в репо, бо потрібні для збірки
 _*.png
+
+# Сторонній інструмент яскравості/моніторів (бінарник)
+MultiMonitorTool.exe
+MultiMonitorTool.cfg

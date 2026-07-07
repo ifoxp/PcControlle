@@ -107,7 +107,18 @@
       "Bash(.venv/Scripts/python.exe -c \"import sys; sys.path.insert\\(0,'.'\\); from widgets.editor import open_command_editor; from screens.settings_screen import SettingsScreen; print\\('імпорти OK'\\)\")",
       "Bash(C:/Users/ifoxp/Android/sdk/platform-tools/adb.exe devices *)",
       "Bash(git commit -m 'feat\\(pc\\): буфер телефон→ПК, стабільність volume, дедуплікація пристроїв *)",
-      "Bash(git commit -m 'feat\\(mobile\\): редактор іконок, буфер, скрін-фікс, керування видимістю/порядком *)"
+      "Bash(git commit -m 'feat\\(mobile\\): редактор іконок, буфер, скрін-фікс, керування видимістю/порядком *)",
+      "Bash(.venv/Scripts/python.exe -c \"import sys; sys.path.insert\\(0,'.'\\); from widgets import build_tile; from widgets.editor import open_command_editor; from screens.grid_screen import GridScreen; from screens.settings_screen import SettingsScreen; print\\('усі імпорти OK'\\)\")",
+      "Bash(rm -f _*.png)",
+      "Bash(git commit -m 'fix\\(mobile\\): скрін через src=файл, drag іконок, адаптивні плитки, 36 кольорів *)",
+      "Bash(.venv/Scripts/python.exe -c \"import flet as ft; print\\([m for m in dir\\(ft.Page\\) if 'close' in m.lower\\(\\) or 'exit' in m.lower\\(\\) or 'confirm' in m.lower\\(\\)]\\)\")",
+      "Bash(.venv/Scripts/python.exe -c \"import sys; sys.path.insert\\(0,'.'\\); import main; from core.storage import Storage; print\\('mobile OK'\\)\")",
+      "Bash(.venv/Scripts/python.exe -c \"from PIL import Image; i=Image.open\\('_grid.png'\\); i.thumbnail\\(\\(340,680\\)\\); i.save\\('_grids.png'\\); print\\(i.size\\)\")",
+      "Bash(echo \"screen_brightness_control  # яскравість моніторів \\(DDC/CI\\)\")",
+      "Bash(echo \"wmi\")",
+      "PowerShell(Get-Process 'PC Control' -ErrorAction SilentlyContinue)",
+      "PowerShell(Stop-Process -Force -ErrorAction SilentlyContinue)",
+      "PowerShell(\"cleaned\")"
     ]
   }
 }

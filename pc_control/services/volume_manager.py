@@ -36,6 +36,12 @@ from ..core.status import REGISTRY, SVC_VOLUME, State
 logger = get_logger("volume_manager")
 
 # --- Налаштування ---
+# App-volume-binding (прив'язка гучності застосунків до Master) вимкнено за
+# замовчуванням: pycaw GetAllSessions/CreateDevice спричиняв нативні СЕГФОЛТИ
+# процесу при зміні аудіо/дисплеїв (Python їх не ловить, весь EXE падав).
+# Пульту потрібна лише master-гучність (/volume), яка працює без цього.
+ENABLE_APP_BINDING = False
+
 FAST_INTERVAL = 0.1   # період основного тіку (с). На ньому й міряємо app — щоб ловити "протягування".
 SETTLE_TICKS = 4      # скільки тіків "дотискаємо" app під Master+offset після руху Master
 MASTER_EPS = 0.5      # поріг (у %), що вважається зміною Master
@@ -380,7 +386,34 @@ class VolumeManager:
     def tick(self):
         iface, dev_id = self._resolve_device()
         master = _get_master_pct(iface)
-        sessions = _iter_sessions()
+        # GetAllSessions() — крихкий нативний виклик pycaw, що спричиняв СЕГФОЛТИ
+        # процесу (нативний краш у CreateDevice при DEVICE_INVALIDATED, який Python
+        # не ловить). Якщо він кілька разів кинув помилку — вимикаємо app-session
+        # polling НАЗОВСІМ (лишається master-гучність, яку й використовує пульт).
+        now = time.monotonic()
+        if not ENABLE_APP_BINDING or getattr(self, "_sessions_disabled", False):
+            sessions = []  # тільки master-гучність, без крихкого GetAllSessions
+        else:
+            need_sessions = (
+                not getattr(self, "_sess_cache", None)
+                or (now - getattr(self, "_sess_ts", 0)) > 3.0
+                or not self.initialized
+                or dev_id != self.device_id
+            )
+            if need_sessions:
+                try:
+                    self._sess_cache = _iter_sessions()
+                    self._sess_ts = now
+                    self._sess_errs = 0
+                except Exception as e:
+                    self._sess_errs = getattr(self, "_sess_errs", 0) + 1
+                    logger.warning("GetAllSessions помилка #%d: %s", self._sess_errs, e)
+                    self._sess_cache = []
+                    if self._sess_errs >= 3:
+                        self._sessions_disabled = True
+                        logger.error("App-session polling ВИМКНЕНО (нестабільний "
+                                     "аудіопристрій). Master-гучність працює далі.")
+            sessions = self._sess_cache
 
         if not self.initialized:
             self._init_state(master, sessions, dev_id)
