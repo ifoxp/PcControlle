@@ -155,13 +155,20 @@ class PairingPanel(QWidget):
         self._clear()
 
         # --- QR-парування ---
+        from ..core.config import CONFIG
         payload = devices.pairing_payload()
         json_code = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-        # QR = deep-link URL: стандартна камера Android розпізнає його й запропонує
-        # відкрити додаток PC Control, який одразу підставить дані парування.
         import base64
         b64 = base64.urlsafe_b64encode(json_code.encode("utf-8")).decode()
-        qr_text = f"pccontrol://pair?d={b64}"
+
+        # QR: у Cloudflare-режимі — https-посилання на /pair (Android App Link веде
+        # в застосунок; браузер-fallback показує кнопку). Без публічної адреси —
+        # deep-link pccontrol:// для локального/ручного тесту.
+        pub = CONFIG.api.public_host.strip()
+        if CONFIG.api.tunnel_mode and pub:
+            qr_text = f"https://{pub}/pair?d={b64}"
+        else:
+            qr_text = f"pccontrol://pair?d={b64}"
         # для кнопки «Копіювати» лишаємо JSON (вставляється в додаток вручну)
         copy_text = json_code
 

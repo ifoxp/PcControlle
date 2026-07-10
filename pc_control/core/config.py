@@ -112,17 +112,58 @@ class SorterConfig:
 class ApiConfig:
     host: str = field(default_factory=lambda: _env("PC_API_HOST", "0.0.0.0"))
     port: int = 5050
-    # Білий IP/домен для сертифіката та QR-парування (телефон стукає сюди ззовні)
+    # Публічна адреса ПК для QR-парування. У режимі Cloudflare — сюди пишемо
+    # піддомен тунелю (напр. pc1.56207556.xyz); телефон стукає на нього.
     public_host: str = field(default_factory=lambda: _env("PC_PUBLIC_HOST", ""))
     # Дозволені схеми для /open_url
     allowed_url_schemes: tuple[str, ...] = ("http", "https")
+
+    # --- Cloudflare Tunnel ---
+    # Токен тунелю (з дашборду Cloudflare). Якщо заданий — застосунок сам піднімає
+    # cloudflared у фоні, а сервер слухає лише localhost по HTTP (зовнішній HTTPS
+    # дає Cloudflare). Порт на роутері тоді не потрібен.
+    cf_tunnel_token: str = field(default_factory=lambda: _env("PC_CF_TUNNEL_TOKEN", ""))
+
+    # SHA-256 підпису APK (для Android App Links / assetlinks.json). Заповнюється
+    # після збірки APK. Формат: "AA:BB:CC:...". Порожній => App Links вимкнено.
+    app_cert_sha256: str = field(default_factory=lambda: _env("PC_APP_CERT_SHA256", ""))
 
     # Rate-limit: макс. запитів з однієї IP за вікно
     rate_limit_max: int = 60
     rate_limit_window_sec: int = 10
 
-    # HTTPS: якщо True — сервер підіймається на TLS (self-signed cert)
+    # HTTPS: якщо True — сервер підіймається на TLS (self-signed cert).
+    # Керується перемикачем у config.json ("use_tls"); за замовчуванням True для
+    # прямого доступу. У Cloudflare-режимі (є токен) TLS локально не потрібен —
+    # див. властивість tunnel_mode / use_local_tls нижче.
     use_tls: bool = True
+
+    @property
+    def tunnel_mode(self) -> bool:
+        """True, якщо ввімкнено Cloudflare-тунель (заданий токен)."""
+        return bool(self.cf_tunnel_token)
+
+    @property
+    def use_local_tls(self) -> bool:
+        """Чи слухати локальний сервер по TLS. У тунель-режимі — НІ (HTTP на
+        localhost, зовнішній HTTPS дає Cloudflare)."""
+        return self.use_tls and not self.tunnel_mode
+
+    @property
+    def bind_host(self) -> str:
+        """На якому інтерфейсі слухати. У тунель-режимі — лише 127.0.0.1 (ззовні
+        заходить тільки cloudflared з localhost, у мережу не світимо)."""
+        return "127.0.0.1" if self.tunnel_mode else self.host
+
+    @property
+    def public_url(self) -> str:
+        """Базовий URL для QR-парування (телефон стукає сюди)."""
+        host = self.public_host.strip() or "127.0.0.1"
+        if self.tunnel_mode:
+            # Cloudflare завжди дає зовнішній HTTPS на 443, без порту в URL
+            return f"https://{host}"
+        scheme = "https" if self.use_tls else "http"
+        return f"{scheme}://{host}:{self.port}"
 
     # Brute-force бан IP (ескалація: base * 2**strikes, до max)
     ban_threshold: int = 8       # невдач авторизації за вікно → бан

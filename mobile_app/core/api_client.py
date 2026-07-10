@@ -71,7 +71,12 @@ class ApiClient:
     @property
     def base_url(self) -> str:
         scheme = "https" if self.pc.get("tls", True) else "http"
-        return f"{scheme}://{self.pc['host']}:{self.pc['port']}"
+        host = self.pc["host"]
+        port = self.pc.get("port", 5050)
+        # стандартні порти не додаємо в URL (443/80) — чистий хост для Cloudflare
+        if (scheme == "https" and port == 443) or (scheme == "http" and port == 80):
+            return f"{scheme}://{host}"
+        return f"{scheme}://{host}:{port}"
 
     def _headers(self, extra: dict | None = None) -> dict:
         h = {"Authorization": f"Bearer {self.pc['token']}"}
@@ -82,8 +87,13 @@ class ApiClient:
     def _client(self):
         import httpx
         if self.pc.get("tls", True):
-            transport = _make_pinned_transport(self.pc.get("fingerprint", ""), self.retries)
-            return httpx.Client(transport=transport, timeout=self.timeout)
+            fp = (self.pc.get("fingerprint", "") or "").strip()
+            if fp:
+                # self-signed сервер (прямий доступ) → pinning по fingerprint
+                transport = _make_pinned_transport(fp, self.retries)
+                return httpx.Client(transport=transport, timeout=self.timeout)
+            # порожній fingerprint → Cloudflare: довірений CA, звичайна перевірка TLS
+            return httpx.Client(timeout=self.timeout, retries=self.retries, verify=True)
         return httpx.Client(timeout=self.timeout, retries=self.retries)
 
     def request(self, method: str, path: str, *, params: dict | None = None):
@@ -130,10 +140,18 @@ def pair(host: str, port: int, tls: bool, pin: str, name: str,
     """POST /pair. Лінивий httpx. Повертає {token, fingerprint, server_name}."""
     import httpx
     scheme = "https" if tls else "http"
-    url = f"{scheme}://{host}:{port}/pair"
-    if tls:
+    # чистий URL без стандартного порту (443/80) — для Cloudflare
+    if (scheme == "https" and port == 443) or (scheme == "http" and port == 80):
+        url = f"{scheme}://{host}/pair"
+    else:
+        url = f"{scheme}://{host}:{port}/pair"
+    if tls and (expected_fp or "").strip():
+        # self-signed сервер → pinning
         transport = _make_pinned_transport(expected_fp, 1)
         client = httpx.Client(transport=transport, timeout=timeout)
+    elif tls:
+        # Cloudflare (порожній fingerprint) → довірений CA
+        client = httpx.Client(timeout=timeout, verify=True)
     else:
         client = httpx.Client(timeout=timeout)
     try:

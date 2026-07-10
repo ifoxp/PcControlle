@@ -101,6 +101,49 @@ def create_app() -> Flask:
     def health():
         return "PC Control is running"
 
+    # --- Android App Links: дозволяє https-QR відкривати застосунок напряму ---
+    @app.get("/.well-known/assetlinks.json")
+    def assetlinks():
+        """Digital Asset Links — Android перевіряє цей файл, щоб довіряти застосунку
+        відкриття посилань на цей хост. SHA-256 підпису APK береться з конфігу
+        (заповнюється після збірки APK). Порожній список = App Links вимкнено."""
+        fp = CONFIG.api.app_cert_sha256.strip()
+        if not fp:
+            return jsonify([])  # ще не налаштовано — Android просто не відкриє авто
+        return jsonify([{
+            "relation": ["delegate_permission/common.handle_all_urls"],
+            "target": {
+                "namespace": "android_app",
+                "package_name": "com.shramix.pc_control",
+                "sha256_cert_fingerprints": [fp],
+            },
+        }])
+
+    # --- /pair (GET): сторінка-місток зі скану QR у браузері ---
+    @app.get("/pair")
+    def pair_landing():
+        """Коли QR (https://host/pair?d=...) відкрився в БРАУЗЕРІ (App Link не
+        спрацював) — показуємо кнопку «Відкрити в застосунку» (deep-link) + код."""
+        d = request.args.get("d", "")
+        if not d:
+            return "PC Control", 200
+        deep = f"pccontrol://pair?d={d}"
+        html = f"""<!doctype html><html lang="uk"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PC Control — підключення</title>
+<style>body{{font-family:system-ui,sans-serif;background:#0f1116;color:#e8e8ea;
+display:flex;min-height:100vh;margin:0;align-items:center;justify-content:center;text-align:center}}
+.card{{padding:32px;max-width:360px}}a.btn{{display:inline-block;margin-top:20px;padding:14px 24px;
+background:#4b8cf5;color:#fff;text-decoration:none;border-radius:12px;font-size:17px}}
+code{{word-break:break-all;font-size:12px;color:#8a8a92}}</style></head>
+<body><div class="card"><h2>PC Control</h2>
+<p>Натисни, щоб підключити цей ПК у застосунку:</p>
+<a class="btn" href="{deep}">Відкрити в застосунку</a>
+<p style="margin-top:24px;font-size:13px;color:#8a8a92">Якщо застосунок не відкрився —
+скопіюй код і встав у ньому вручну:</p><code>{d}</code></div>
+<script>setTimeout(function(){{location.href="{deep}"}},400);</script></body></html>"""
+        return html
+
     @app.get("/shutdown")
     @require_device(dangerous=True)
     def shutdown():
@@ -443,20 +486,24 @@ def create_app() -> Flask:
 def _serve(app: Flask) -> None:
     REGISTRY.register(SVC_API, "Веб-сервер (API)")
     cfg = CONFIG.api
-    scheme = "https" if cfg.use_tls else "http"
-    REGISTRY.update(SVC_API, state=State.IDLE, detail=f"Слухаю {scheme}://{cfg.host}:{cfg.port}")
+    bind = cfg.bind_host
     try:
-        if cfg.use_tls:
-            # HTTPS: self-signed сертифікат, клієнт довіряє через pinning fingerprint.
-            # Flask-run з ssl_context — надійний шлях для TLS без reverse-proxy.
+        if cfg.use_local_tls:
+            # Прямий доступ по HTTPS: self-signed cert + pinning fingerprint.
+            REGISTRY.update(SVC_API, state=State.IDLE, detail=f"Слухаю https://{bind}:{cfg.port}")
             ctx = tls.ssl_context()
             logger.info("API (HTTPS) fingerprint: %s", tls.fingerprint())
-            app.run(host=cfg.host, port=cfg.port, ssl_context=ctx,
+            app.run(host=bind, port=cfg.port, ssl_context=ctx,
                     debug=False, use_reloader=False, threaded=True)
         else:
-            # HTTP: продакшн-WSGI waitress (для локального режиму без TLS)
+            # HTTP через waitress (продакшн-WSGI). У Cloudflare-режимі слухаємо лише
+            # localhost — ззовні заходить тільки cloudflared, зовнішній HTTPS дає CF.
+            mode = "Cloudflare-тунель" if cfg.tunnel_mode else "локальний HTTP"
+            REGISTRY.update(SVC_API, state=State.IDLE,
+                            detail=f"Слухаю http://{bind}:{cfg.port} ({mode})")
+            logger.info("API (HTTP/waitress) на %s:%s, режим: %s", bind, cfg.port, mode)
             from waitress import serve
-            serve(app, host=cfg.host, port=cfg.port, threads=8)
+            serve(app, host=bind, port=cfg.port, threads=8)
     except Exception as e:
         logger.error("API server crashed: %s", e)
         REGISTRY.update(SVC_API, state=State.ERROR, detail=str(e))

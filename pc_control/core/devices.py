@@ -165,20 +165,35 @@ def list_devices() -> list[dict]:
 def pairing_payload() -> dict:
     """
     Дані для QR-парування: усе, що телефону треба, щоб підключитись і довіряти.
-      host        — білий IP/домен (телефон стукає сюди ззовні)
-      port        — порт API
+      host        — адреса ПК (Cloudflare-піддомен або білий IP/домен)
+      port        — порт API (443 у тунель-режимі)
       pin         — PIN парування
-      fingerprint — SHA-256 сертифіката (для pinning; MITM неможливий)
+      fingerprint — SHA-256 сертифіката для pinning; ПОРОЖНІЙ у тунель-режимі
+                    (Cloudflare має справжній довірений CA-сертифікат, який
+                    ротується — тому телефон довіряє звичайному CA, без pinning).
     """
     from .config import CONFIG
-    from . import tls
 
-    host = CONFIG.api.public_host.strip() or "127.0.0.1"
+    cfg = CONFIG.api
+    host = cfg.public_host.strip() or "127.0.0.1"
+
+    if cfg.tunnel_mode:
+        # Cloudflare: зовнішній HTTPS на 443, довірений CA, без self-signed pinning
+        return {
+            "v": 1,
+            "host": host,
+            "port": 443,
+            "tls": True,
+            "pin": get_or_create_pin(),
+            "fingerprint": "",   # порожній => мобільний довіряє CA, не пінить
+        }
+
+    from . import tls
     return {
         "v": 1,
         "host": host,
-        "port": CONFIG.api.port,
-        "tls": CONFIG.api.use_tls,
+        "port": cfg.port,
+        "tls": cfg.use_tls,
         "pin": get_or_create_pin(),
         "fingerprint": tls.fingerprint(),
     }

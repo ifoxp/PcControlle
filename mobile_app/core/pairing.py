@@ -35,8 +35,11 @@ def parse_qr(raw: str) -> PairingData:
     """
     raw = (raw or "").strip()
 
-    # deep-link: pccontrol://pair?d=<base64>
-    if raw.startswith("pccontrol://"):
+    # Посилання зі скану QR у форматі:
+    #   pccontrol://pair?d=<base64>            (кастомна схема)
+    #   https://<host>/pair?d=<base64>          (Cloudflare App Link)
+    # З обох витягуємо параметр d і декодуємо base64 → JSON.
+    if raw.startswith("pccontrol://") or ("/pair?" in raw and raw.startswith("http")):
         import base64
         from urllib.parse import urlparse, parse_qs
         try:

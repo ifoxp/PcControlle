@@ -62,31 +62,26 @@ class PairScreen(ft.Container):
         )
         self._name = ft.TextField(label="Назва телефона", value=_device_name(),
                                   color=theme.TEXT)
-        self._host = ft.TextField(label="Або адреса (IP)", color=theme.TEXT)
-        self._pin = ft.TextField(label="PIN", color=theme.TEXT)
-        self._fp = ft.TextField(label="Відбиток (fingerprint)", color=theme.TEXT)
         self._status = ft.Text("", size=13, color=theme.TEXT_DIM)
 
         if self._prefill:
             self._code.value = self._prefill
 
+        # Підключення ТІЛЬКИ через QR/код (ручний ввід host/PIN/fingerprint прибрано
+        # на прохання: він геморний). Основний шлях — скан QR камерою/Об'єктивом →
+        # застосунок відкривається з кодом і парується сам. Резерв — вставити код.
         col = ft.Column(
             [
-                ft.Icon(ft.Icons.PHONELINK_LOCK, size=44, color=theme.ACCENT),
+                ft.Icon(ft.Icons.QR_CODE_SCANNER, size=44, color=theme.ACCENT),
                 ft.Text("Підключення до ПК", size=22, weight=ft.FontWeight.BOLD,
                         color=theme.TEXT),
-                ft.Text("На ПК: Панель → Пристрої. Скопіюй код і встав нижче.",
+                ft.Text("Відскануй QR на ПК (Панель → Пристрої) камерою — застосунок "
+                        "відкриється сам. Або встав код нижче вручну.",
                         size=13, color=theme.TEXT_DIM),
                 self._name,
                 self._code,
                 ft.FilledButton("Підключити за кодом", icon=ft.Icons.LINK,
                                 on_click=self._pair_from_code),
-                ft.Divider(color=theme.BORDER),
-                ft.Text("Або вручну:", size=13, color=theme.TEXT_DIM),
-                self._host,
-                self._pin,
-                self._fp,
-                ft.OutlinedButton("Підключити вручну", on_click=self._pair_manual),
                 self._status,
             ],
             scroll=ft.ScrollMode.AUTO, spacing=12,
@@ -134,11 +129,3 @@ class PairScreen(ft.Container):
             return
         self._do_pair(data.host, data.port, data.tls, data.pin, data.fingerprint,
                       self._name.value or "Мій телефон")
-
-    def _pair_manual(self, _):
-        host = (self._host.value or "").strip()
-        if not host:
-            self._set_status("Вкажи адресу ПК", theme.DANGER)
-            return
-        self._do_pair(host, 5050, True, (self._pin.value or "").strip(),
-                      (self._fp.value or "").strip(), self._name.value or "Мій телефон")
