@@ -48,6 +48,15 @@ def parse_qr(raw: str) -> PairingData:
             raw = base64.urlsafe_b64decode(b64.encode()).decode("utf-8")
         except Exception as e:
             raise ValueError("Пошкоджений код парування у посиланні.") from e
+    elif not raw.startswith("{"):
+        # Голий base64-код (те, що браузер-місток копіює в буфер обміну).
+        import base64
+        try:
+            decoded = base64.urlsafe_b64decode(raw.encode()).decode("utf-8")
+            if decoded.strip().startswith("{"):
+                raw = decoded
+        except Exception:
+            pass  # не base64 — далі спробуємо як JSON і дамо зрозумілу помилку
 
     try:
         data = json.loads(raw)

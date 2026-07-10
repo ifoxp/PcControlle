@@ -92,9 +92,13 @@ class ApiClient:
                 # self-signed сервер (прямий доступ) → pinning по fingerprint
                 transport = _make_pinned_transport(fp, self.retries)
                 return httpx.Client(transport=transport, timeout=self.timeout)
-            # порожній fingerprint → Cloudflare: довірений CA, звичайна перевірка TLS
-            return httpx.Client(timeout=self.timeout, retries=self.retries, verify=True)
-        return httpx.Client(timeout=self.timeout, retries=self.retries)
+            # порожній fingerprint → Cloudflare: довірений CA. retries задаємо через
+            # транспорт (httpx.Client НЕ приймає retries напряму — це давало
+            # "Client.__init__() got an unexpected keyword argument 'retries'").
+            transport = httpx.HTTPTransport(retries=self.retries)
+            return httpx.Client(timeout=self.timeout, transport=transport, verify=True)
+        transport = httpx.HTTPTransport(retries=self.retries)
+        return httpx.Client(timeout=self.timeout, transport=transport)
 
     def request(self, method: str, path: str, *, params: dict | None = None):
         import httpx

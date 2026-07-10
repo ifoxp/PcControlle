@@ -56,43 +56,75 @@ class PairScreen(ft.Container):
             pass
 
     def _build(self):
-        self._code = ft.TextField(
-            label="Код парування (встав сюди)", multiline=True, min_lines=2, max_lines=4,
-            color=theme.TEXT,
-        )
         self._name = ft.TextField(label="Назва телефона", value=_device_name(),
                                   color=theme.TEXT)
+        self._code = ft.TextField(
+            label="Код парування (резерв — встав вручну)", multiline=True,
+            min_lines=2, max_lines=4, color=theme.TEXT,
+        )
         self._status = ft.Text("", size=13, color=theme.TEXT_DIM)
 
         if self._prefill:
             self._code.value = self._prefill
 
-        # Підключення ТІЛЬКИ через QR/код (ручний ввід host/PIN/fingerprint прибрано
-        # на прохання: він геморний). Основний шлях — скан QR камерою/Об'єктивом →
-        # застосунок відкривається з кодом і парується сам. Резерв — вставити код.
-        col = ft.Column(
+        # Головний шлях: відкрий камеру → проскануй QR на ПК → у браузері натисни
+        # «Скопіювати код і відкрити застосунок» → код опиниться в буфері й
+        # відкриється цей застосунок → тисни «Підключитися» (візьме код з буфера).
+        # Верхня частина скролиться, велика кнопка «Підключитися» закріплена ВНИЗУ.
+        top = ft.Column(
             [
                 ft.Icon(ft.Icons.QR_CODE_SCANNER, size=44, color=theme.ACCENT),
                 ft.Text("Підключення до ПК", size=22, weight=ft.FontWeight.BOLD,
                         color=theme.TEXT),
-                ft.Text("Відскануй QR на ПК (Панель → Пристрої) камерою — застосунок "
-                        "відкриється сам. Або встав код нижче вручну.",
+                ft.Text("1. Відкрий камеру телефона і проскануй QR на ПК "
+                        "(Панель → Пристрої).\n"
+                        "2. У браузері натисни «Скопіювати код і відкрити застосунок».\n"
+                        "3. Повернувшись сюди — натисни «Підключитися» внизу.",
                         size=13, color=theme.TEXT_DIM),
                 self._name,
-                self._code,
-                ft.FilledButton("Підключити за кодом", icon=ft.Icons.LINK,
-                                on_click=self._pair_from_code),
                 self._status,
+                ft.Divider(color=theme.BORDER),
+                ft.Text("Не спрацювало? Встав код вручну:", size=12, color=theme.TEXT_DIM),
+                self._code,
+                ft.OutlinedButton("Підключити за вставленим кодом",
+                                  on_click=self._pair_from_code, width=10000),
             ],
-            scroll=ft.ScrollMode.AUTO, spacing=12,
+            scroll=ft.ScrollMode.AUTO, spacing=12, expand=True,
         )
-        # відступ зверху через padding (SafeArea давав сірий екран); top=60 —
-        # запас під камеру/статус-бар
-        self.padding = ft.Padding(left=20, top=60, right=20, bottom=20)
+        # велика кнопка на всю ширину, закріплена внизу
+        big_btn = ft.FilledButton(
+            "Підключитися", icon=ft.Icons.LINK,
+            on_click=self._pair_from_clipboard, height=58, width=10000,
+        )
+        col = ft.Column([top, big_btn], spacing=12, expand=True)
+        self.padding = ft.Padding(left=20, top=60, right=20, bottom=24)
         self.content = col
 
         if self._prefill:
             self._pair_from_code(None)
+
+    async def _pair_from_clipboard(self, _):
+        """Головна кнопка: бере код парування з буфера обміну і парується.
+        clipboard.get() у Flet 0.85 — async, тож обробник async."""
+        self._set_status("Читаю буфер обміну…", theme.WARN)
+        raw = ""
+        try:
+            raw = (await self._pg.clipboard.get()) or ""
+        except Exception:
+            raw = ""
+        raw = raw.strip()
+        if not raw:
+            self._set_status("Буфер порожній. Спершу натисни кнопку в браузері "
+                             "після скану QR.", theme.DANGER)
+            return
+        try:
+            data = pairing.parse_qr(raw)
+        except ValueError:
+            self._set_status("У буфері не код парування. Проскануй QR на ПК і "
+                             "натисни кнопку в браузері.", theme.DANGER)
+            return
+        self._do_pair(data.host, data.port, data.tls, data.pin, data.fingerprint,
+                      self._name.value or "Мій телефон")
 
     def _set_status(self, msg, color=None):
         self._status.value = msg

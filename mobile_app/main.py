@@ -149,37 +149,13 @@ def main(page: "ft.Page"):
         except Exception:
             _error_view(page, "Головний екран", traceback.format_exc())
 
-    def _is_pair_link(route: str) -> bool:
-        # і кастомна схема pccontrol://pair, і https App Link .../pair?d=...
-        return bool(route) and "pair" in route and (
-            "pccontrol" in route or "/pair" in route or "d=" in route
-        )
-
-    def _handle_deeplink(route: str) -> bool:
-        try:
-            if _is_pair_link(route):
-                go_pair(prefill=route)
-                return True
-        except Exception:
-            pass
-        return False
-
-    # реакція на deep-link, коли застосунок УЖЕ відкритий (гарячий шлях)
-    try:
-        page.on_route_change = lambda e: _handle_deeplink(getattr(e, "route", "") or page.route)
-    except Exception:
-        pass
-
-    # ХОЛОДНИЙ старт: Об'єктив/камера запускають застосунок з нуля і передають
-    # посилання як початковий маршрут. on_route_change тут може не спрацювати, тож
-    # читаємо page.route одразу. Якщо це pair-лінк — одразу на екран парування.
-    initial = ""
-    try:
-        initial = page.route or ""
-    except Exception:
-        pass
-    if not _handle_deeplink(initial):
-        go_home()
+    # Парування — через буфер обміну: браузер-місток (сторінка /pair на ПК)
+    # копіює код парування в буфер і відкриває застосунок через pccontrol://.
+    # Flet 0.85 не передає deep-link дані в Python, тож застосунок просто
+    # відкривається на екрані парування, а користувач тисне «Підключитися» —
+    # код береться з буфера обміну. deep-link тут потрібен ЛИШЕ щоб відкрити
+    # застосунок (це працює), дані ж ідуть через буфер.
+    go_home()
 
 
 class _MainShell(ft.Container):

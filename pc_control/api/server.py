@@ -128,20 +128,40 @@ def create_app() -> Flask:
         if not d:
             return "PC Control", 200
         deep = f"pccontrol://pair?d={d}"
+        # Місток: кнопка копіює КОД у буфер обміну і відкриває застосунок. У
+        # застосунку кнопка «Підключитися» бере код із буфера — так обходимо те, що
+        # Flet 0.85 не передає deep-link у Python.
         html = f"""<!doctype html><html lang="uk"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>PC Control — підключення</title>
 <style>body{{font-family:system-ui,sans-serif;background:#0f1116;color:#e8e8ea;
 display:flex;min-height:100vh;margin:0;align-items:center;justify-content:center;text-align:center}}
-.card{{padding:32px;max-width:360px}}a.btn{{display:inline-block;margin-top:20px;padding:14px 24px;
-background:#4b8cf5;color:#fff;text-decoration:none;border-radius:12px;font-size:17px}}
-code{{word-break:break-all;font-size:12px;color:#8a8a92}}</style></head>
+.card{{padding:32px;max-width:360px}}button.btn{{margin-top:20px;padding:16px 26px;
+background:#4b8cf5;color:#fff;border:none;border-radius:12px;font-size:17px;cursor:pointer}}
+.ok{{color:#5fd88a;margin-top:14px;font-size:14px;min-height:20px}}
+code{{word-break:break-all;font-size:11px;color:#8a8a92}}</style></head>
 <body><div class="card"><h2>PC Control</h2>
-<p>Натисни, щоб підключити цей ПК у застосунку:</p>
-<a class="btn" href="{deep}">Відкрити в застосунку</a>
-<p style="margin-top:24px;font-size:13px;color:#8a8a92">Якщо застосунок не відкрився —
-скопіюй код і встав у ньому вручну:</p><code>{d}</code></div>
-<script>setTimeout(function(){{location.href="{deep}"}},400);</script></body></html>"""
+<p>Натисни кнопку — код скопіюється, і відкриється застосунок.
+Там натисни «Підключитися».</p>
+<button class="btn" onclick="go()">Скопіювати код і відкрити застосунок</button>
+<div class="ok" id="ok"></div>
+<p style="margin-top:24px;font-size:12px;color:#8a8a92">Якщо не спрацювало — скопіюй код вручну:</p>
+<code>{d}</code></div>
+<script>
+var CODE="{d}";
+function go(){{
+  var done=function(){{
+    document.getElementById('ok').textContent='Код скопійовано! Відкриваю застосунок…';
+    setTimeout(function(){{location.href="{deep}"}},500);
+  }};
+  if(navigator.clipboard&&navigator.clipboard.writeText){{
+    navigator.clipboard.writeText(CODE).then(done,done);
+  }}else{{
+    var t=document.createElement('textarea');t.value=CODE;document.body.appendChild(t);
+    t.select();try{{document.execCommand('copy')}}catch(e){{}}document.body.removeChild(t);done();
+  }}
+}}
+</script></body></html>"""
         return html
 
     @app.get("/shutdown")
@@ -458,10 +478,15 @@ code{{word-break:break-all;font-size:12px;color:#8a8a92}}</style></head>
         token = devices.pair_new_device(name, ip)
         audit.audit(audit.PAIR_OK, ip=ip, name=name)
         REGISTRY.update(SVC_API, detail=f"Спаровано: {name}", touch=True)
+        # У Cloudflare-режимі fingerprint ПОРОЖНІЙ: зовнішній TLS дає Cloudflare
+        # (довірений CA), а не наш self-signed cert. Якщо повернути self-signed
+        # fingerprint — клієнт пінитиме його й НЕ довірятиме CF-сертифікату
+        # ("Fingerprint не збігся"). Порожній => клієнт довіряє CA.
+        fp = "" if CONFIG.api.tunnel_mode else tls.fingerprint()
         return jsonify({
             "token": token,
             "server_name": "PC Control",
-            "fingerprint": tls.fingerprint(),
+            "fingerprint": fp,
         })
 
     @app.get("/devices")
