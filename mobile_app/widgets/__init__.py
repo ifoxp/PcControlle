@@ -27,6 +27,10 @@ from widgets.simple import (
     build_toggle_tile,
     build_url_clipboard_tile,
 )
+from widgets.advanced import (
+    build_power_menu_tile,
+    build_process_list_tile,
+)
 
 _BUILDERS = {
     "button": build_button_tile,
@@ -38,6 +42,8 @@ _BUILDERS = {
     "picker": build_picker_tile,
     "url_clipboard": build_url_clipboard_tile,
     "push_clipboard": build_push_clipboard_tile,
+    "process_list": build_process_list_tile,
+    "power_menu": build_power_menu_tile,
 }
 
 

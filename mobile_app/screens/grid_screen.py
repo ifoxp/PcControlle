@@ -37,10 +37,14 @@ class GridScreen(ft.Container):
         self._load_cached_silent()
 
     def did_mount(self):
-        # мережеві виклики — лише коли контрол уже на сторінці (інакше run_thread
-        # до готовності сесії кидає помилку → на Android це «сірий екран»)
+        # Показуємо кеш миттєво (вже зроблено в __init__). Мережеве оновлення —
+        # ТІЛЬКИ якщо маніфест застарів (раз/день) або кешу ще немає. Так відкриття
+        # застосунку не гальмує щоразу мережею; свіжі команди підтягнуться самі.
         try:
-            self.load_manifest()
+            pc = self.storage.get_active()
+            if pc and (self._cached_manifest() is None
+                       or self.storage.manifest_is_stale(pc["id"])):
+                self.load_manifest()
         except Exception:
             pass
 

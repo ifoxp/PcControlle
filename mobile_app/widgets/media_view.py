@@ -125,10 +125,16 @@ def present_bytes(ctx: WidgetContext, data: bytes, *, kind: str, title: str) -> 
     tmp_path = _save_temp(data, suffix)
 
     if kind == "image":
-        body = ft.InteractiveViewer(
+        # тап по зображенню ховає/показує верхню панель — чистий перегляд на весь
+        # екран (особливо коли телефон повернути горизонтально під ландшафтний скрін)
+        img_viewer = ft.InteractiveViewer(
             min_scale=0.8, max_scale=6.0,
             content=ft.Image(src=tmp_path, fit=ft.BoxFit.CONTAIN),
             expand=True,
+        )
+        body = ft.GestureDetector(
+            content=img_viewer, expand=True,
+            on_tap=lambda _: _toggle_bar(),
         )
     else:
         body = ft.Column(
@@ -162,11 +168,23 @@ def present_bytes(ctx: WidgetContext, data: bytes, *, kind: str, title: str) -> 
         ],
     )
 
+    top_bar_wrap = ft.Container(content=top_bar, padding=ft.Padding(0, 36, 0, 0))
+
+    def _toggle_bar():
+        top_bar_wrap.visible = not top_bar_wrap.visible
+        # коли панель схована — зображення на ВЕСЬ екран без відступів
+        overlay.padding = ft.Padding(0, 0, 0, 0) if not top_bar_wrap.visible \
+            else ft.Padding(left=8, top=0, right=8, bottom=8)
+        try:
+            page.update()
+        except Exception:
+            pass
+
     overlay = ft.Container(
         bgcolor="#000000",
         expand=True,
-        padding=ft.Padding(left=8, top=44, right=8, bottom=12),
-        content=ft.Column([top_bar, body], spacing=8, expand=True),
+        padding=ft.Padding(left=8, top=0, right=8, bottom=8),
+        content=ft.Column([top_bar_wrap, body], spacing=6, expand=True),
     )
     page.overlay.append(overlay)
     if hasattr(page, "_back_stack"):
@@ -177,13 +195,17 @@ def present_bytes(ctx: WidgetContext, data: bytes, *, kind: str, title: str) -> 
 def build_media_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
     busy: dict = {}
     response = cmd.get("response", "image")
+    mp = cmd.get("monitor_picker")  # {"path": "/monitors"} — вибір монітора перед скріном
 
-    def fetch():
+    def fetch(extra_params: dict | None = None):
         def work():
             set_busy(busy, True)
             ctx.page.update()
             try:
-                data = ctx.client.get_bytes(cmd["path"], cmd.get("fixed_params") or None)
+                params = dict(cmd.get("fixed_params") or {})
+                if extra_params:
+                    params.update(extra_params)
+                data = ctx.client.get_bytes(cmd["path"], params or None)
                 present_bytes(ctx, data, kind=response, title=cmd.get("title", "Медіа"))
             except Exception as e:
                 ctx.toast(str(e), error=True)
@@ -192,4 +214,49 @@ def build_media_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
                 ctx.page.update()
         ctx.run_async(work)
 
-    return grid_tile(cmd, fetch, busy_ref=busy, on_long_press=ctx.on_edit, columns=cmd.get("_columns", 4))
+    def start():
+        # якщо є вибір монітора — спершу спитати, який (лише коли моніторів >1)
+        if mp:
+            def work():
+                try:
+                    mons = ctx.client.get_json(mp["path"]).get("monitors", [])
+                except Exception:
+                    mons = []
+                if len(mons) <= 1:
+                    fetch()  # один монітор — без вибору
+                    return
+                _pick_monitor(ctx, mons, fetch)
+            ctx.run_async(work)
+        else:
+            fetch()
+
+    return grid_tile(cmd, start, busy_ref=busy, on_long_press=ctx.on_edit,
+                     columns=cmd.get("_columns", 4))
+
+
+def _pick_monitor(ctx: WidgetContext, monitors: list[dict], on_pick) -> None:
+    """Діалог вибору монітора для скріншота (+ варіант «Усі разом»)."""
+    def choose(mon_value):
+        theme.dismiss(ctx.page)
+        on_pick({"monitor": mon_value})
+
+    items = [
+        ft.ListTile(
+            leading=ft.Icon(ft.Icons.MONITOR, color=theme.ACCENT),
+            title=ft.Text(m.get("name", f"Монітор {m.get('index',0)+1}"), color=theme.TEXT),
+            on_click=lambda e, i=m["index"]: choose(str(i)),
+        )
+        for m in monitors
+    ]
+    items.append(ft.ListTile(
+        leading=ft.Icon(ft.Icons.SELECT_ALL, color=theme.TEXT_DIM),
+        title=ft.Text("Усі монітори разом", color=theme.TEXT),
+        on_click=lambda e: choose("all"),
+    ))
+    sheet = ft.AlertDialog(
+        modal=True, bgcolor=theme.SURFACE,
+        title=ft.Text("Скріншот якого монітора?", color=theme.TEXT),
+        content=ft.Column(items, tight=True, spacing=2),
+        actions=[ft.TextButton("Скасувати", on_click=lambda _: theme.dismiss(ctx.page))],
+    )
+    theme.show(ctx.page, sheet)

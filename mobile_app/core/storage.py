@@ -104,14 +104,24 @@ class Storage:
 
     # ------------------------------------------------------------ кеш маніфесту
     def save_manifest(self, pc_id: str, manifest: dict) -> None:
-        """Зберігає останній маніфест ПК — щоб при запуску сітка була одразу."""
+        """Зберігає останній маніфест ПК — щоб при запуску сітка була одразу.
+        Фіксує час перевірки (для авто-оновлення раз/день)."""
+        import time
         data = self._read()
         data.setdefault("manifests", {})[pc_id] = manifest
+        data.setdefault("manifest_checked", {})[pc_id] = int(time.time())
         self._write(data)
 
     def load_manifest(self, pc_id: str) -> dict | None:
         """Кешований маніфест ПК (None, якщо ще не тягнули)."""
         return self._read().get("manifests", {}).get(pc_id)
+
+    def manifest_is_stale(self, pc_id: str, max_age_sec: int = 86400) -> bool:
+        """True, якщо маніфест не перевірявся понад добу (або ніколи). Використовується
+        для тихого авто-оновлення раз/день без впливу на швидкість запуску."""
+        import time
+        ts = self._read().get("manifest_checked", {}).get(pc_id, 0)
+        return (time.time() - ts) > max_age_sec
 
     # ------------------------------------------------------------ UI-налаштування
     def get_settings(self) -> dict:

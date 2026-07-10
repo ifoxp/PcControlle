@@ -14,6 +14,8 @@ hiddenimports = (
     # яскравість моніторів
     + collect_submodules('screen_brightness_control')
     + ['wmi']
+    # процеси/монітори (close_app, /monitors, power caps)
+    + ['psutil', 'win32api', 'win32gui', 'win32process', 'win32con']
 )
 
 a = Analysis(

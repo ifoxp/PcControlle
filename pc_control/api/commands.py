@@ -31,27 +31,25 @@
 from __future__ import annotations
 
 # Версія маніфесту: телефон порівнює й перемальовує сітку, коли змінилась.
-MANIFEST_VERSION = 3
+MANIFEST_VERSION = 4
 
 # Дозволені типи віджетів (для валідації й документації)
 WIDGETS = {"button", "toggle", "slider", "media_view", "audio", "text_input",
-           "picker", "url_clipboard", "push_clipboard"}
+           "picker", "url_clipboard", "push_clipboard", "process_list",
+           "power_menu"}
 
 
 # Порядок = порядок появи в сітці на телефоні.
 COMMANDS: list[dict] = [
     # --- Живлення / система ---
     {
-        "id": "shutdown", "title": "Вимкнути", "icon": "power_settings_new",
-        "widget": "button", "method": "GET", "path": "/shutdown",
+        # Єдине меню живлення: вимкнути/перезапуск/сон/гібернація/заблокувати +
+        # таймер (швидкі пресети + слайдер). Замінює окремі shutdown/timer/lock.
+        # Недоступні дії (напр. гібернація вимкнена) телефон НЕ показує — сервер
+        # шле актуальні caps у params.actions (див. build_manifest).
+        "id": "power", "title": "Живлення", "icon": "power_settings_new",
+        "widget": "power_menu", "method": "GET", "path": "/power",
         "dangerous": True, "response": "text", "group": "Система",
-    },
-    {
-        "id": "shutdown_timer", "title": "Таймер вимк.", "icon": "timer",
-        "widget": "text_input", "method": "GET", "path": "/shutdown_timer",
-        "dangerous": True, "response": "text", "group": "Система",
-        "params": {"name": "minutes", "label": "Хвилини (0 = скасувати)",
-                   "kind": "number", "default": "30"},
     },
     {
         "id": "toggle_monitor", "title": "Монітори", "icon": "desktop_windows",
@@ -59,17 +57,23 @@ COMMANDS: list[dict] = [
         "dangerous": True, "response": "text", "group": "Система",
     },
     {
-        "id": "task_manager", "title": "Диспетчер", "icon": "list_alt",
-        "widget": "button", "method": "GET", "path": "/hotkey",
-        "dangerous": True, "response": "text", "group": "Система",
-        "fixed_params": {"action": "task_manager"},
+        # Список застосунків із вікном + вбити вибраний (рятує при зависанні,
+        # коли навіть диспетчер задач недоступний). Окрему кнопку «Диспетчер»
+        # прибрано — вона дублювала гарячу клавішу Ctrl+Shift+Esc у пікері.
+        "id": "close_app", "title": "Закрити додаток", "icon": "cancel",
+        "widget": "process_list", "method": "GET", "path": "/processes",
+        "dangerous": False, "response": "json", "group": "Система",
+        "action": {"path": "/kill", "param": "pid", "dangerous": True},
     },
 
     # --- Медіа / екран ---
     {
+        # Скріншот із вибором монітора (список підтягується з /monitors). Перегляд
+        # на телефоні — fullscreen у ландшафті. Якщо монітор один — вибору немає.
         "id": "screenshot", "title": "Скріншот", "icon": "photo_camera",
         "widget": "media_view", "method": "GET", "path": "/screenshot",
         "dangerous": False, "response": "image", "group": "Медіа",
+        "monitor_picker": {"path": "/monitors"},
     },
 
     # --- Звук ---
@@ -87,9 +91,21 @@ COMMANDS: list[dict] = [
         "widget": "picker", "method": "GET", "path": "/hotkey",
         "dangerous": True, "response": "text", "group": "Клавіші",
         "params": {"name": "action", "options": [
-            {"value": "alt_tab", "label": "Alt+Tab"},
-            {"value": "alt_f4", "label": "Alt+F4"},
+            {"value": "alt_tab", "label": "Alt+Tab (перемкнути вікно)"},
+            {"value": "alt_f4", "label": "Alt+F4 (закрити вікно)"},
             {"value": "task_manager", "label": "Диспетчер задач"},
+            {"value": "show_desktop", "label": "Показати робочий стіл"},
+            {"value": "minimize_all", "label": "Згорнути всі вікна"},
+            {"value": "explorer", "label": "Провідник"},
+            {"value": "task_view", "label": "Перегляд задач (Win+Tab)"},
+            {"value": "snip", "label": "Ножиці (скріншот області)"},
+            {"value": "new_desktop", "label": "Новий робочий стіл"},
+            {"value": "switch_desktop_right", "label": "Наступний робочий стіл"},
+            {"value": "switch_desktop_left", "label": "Попередній робочий стіл"},
+            {"value": "close_desktop", "label": "Закрити робочий стіл"},
+            {"value": "settings", "label": "Параметри Windows"},
+            {"value": "run_dialog", "label": "Виконати (Win+R)"},
+            {"value": "emoji", "label": "Панель емодзі"},
         ]},
     },
 
@@ -111,12 +127,7 @@ COMMANDS: list[dict] = [
         "params": {"name": "text"},
     },
 
-    # --- НОВІ команди (перевірка динамічного підтягування) ---
-    {
-        "id": "lock", "title": "Заблокувати", "icon": "lock",
-        "widget": "button", "method": "GET", "path": "/lock",
-        "dangerous": True, "response": "text", "group": "Система",
-    },
+    # --- Медіа ---
     {
         "id": "media_playpause", "title": "Play / Pause", "icon": "play_arrow",
         "widget": "button", "method": "GET", "path": "/media",
@@ -153,10 +164,48 @@ COMMANDS: list[dict] = [
 ]
 
 
-def build_manifest() -> dict:
-    """Повний маніфест для телефона: версія + список команд."""
+def build_manifest(caps: dict | None = None) -> dict:
+    """
+    Маніфест для телефона: версія + список команд, адаптований під МОЖЛИВОСТІ ПК.
+
+    caps (від сервера):
+      power     — {"shutdown":bool,"restart":bool,"sleep":bool,"hibernate":bool,"lock":bool}
+      monitors  — к-ть моніторів (для приховування «Монітори», якщо один)
+
+    Розумне приховування: недоступні дії живлення не потрапляють у power_menu;
+    команда «Монітори» ховається, якщо монітор один. Так телефон не показує того,
+    чого ПК не вміє.
+    """
+    caps = caps or {}
+    power = caps.get("power") or {
+        "shutdown": True, "restart": True, "sleep": True,
+        "hibernate": True, "lock": True,
+    }
+    monitors = int(caps.get("monitors", 2))
+
+    # мітки дій живлення в порядку показу
+    POWER_ACTIONS = [
+        ("shutdown", "Вимкнути", "power_settings_new"),
+        ("restart", "Перезапуск", "restart_alt"),
+        ("sleep", "Сон", "bedtime"),
+        ("hibernate", "Гібернація", "ac_unit"),
+        ("lock", "Заблокувати", "lock"),
+    ]
+
+    out = []
+    for cmd in COMMANDS:
+        c = dict(cmd)  # копія, щоб не мутувати оригінал
+        if c.get("widget") == "power_menu":
+            c["params"] = {"actions": [
+                {"value": a, "label": lbl, "icon": ic}
+                for a, lbl, ic in POWER_ACTIONS if power.get(a, False)
+            ]}
+        if c.get("id") == "toggle_monitor" and monitors < 2:
+            continue  # один монітор — перемикати нема сенсу
+        out.append(c)
+
     return {
         "version": MANIFEST_VERSION,
         "widgets": sorted(WIDGETS),
-        "commands": COMMANDS,
+        "commands": out,
     }

@@ -50,11 +50,110 @@ from ..services import sorter
 logger = get_logger("api")
 keyboard = KeyboardController()
 
+# Гарячі клавіші. Формат: (список модифікаторів, клавіша).
+# Key.cmd — це клавіша Windows (Win/Super).
 HOTKEYS = {
     "alt_tab": ([Key.alt], Key.tab),
     "alt_f4": ([Key.alt], Key.f4),
     "task_manager": ([Key.ctrl, Key.shift], Key.esc),
+    # --- нові корисні (не перетинаються з наявними) ---
+    "show_desktop": ([Key.cmd], "d"),          # Win+D — згорнути/показати робочий стіл
+    "explorer": ([Key.cmd], "e"),              # Win+E — Провідник
+    "task_view": ([Key.cmd], Key.tab),         # Win+Tab — перегляд задач
+    "snip": ([Key.cmd, Key.shift], "s"),       # Win+Shift+S — ножиці (скріншот області)
+    "new_desktop": ([Key.cmd, Key.ctrl], "d"), # Win+Ctrl+D — новий віртуальний стіл
+    "close_desktop": ([Key.cmd, Key.ctrl], Key.f4),  # Win+Ctrl+F4 — закрити вірт. стіл
+    "switch_desktop_right": ([Key.cmd, Key.ctrl], Key.right),  # наступний вірт. стіл
+    "switch_desktop_left": ([Key.cmd, Key.ctrl], Key.left),    # попередній вірт. стіл
+    "settings": ([Key.cmd], "i"),              # Win+I — Параметри Windows
+    "emoji": ([Key.cmd], "."),                 # Win+. — панель емодзі
+    "minimize_all": ([Key.cmd], "m"),          # Win+M — згорнути всі вікна
+    "run_dialog": ([Key.cmd], "r"),            # Win+R — Виконати
 }
+
+
+# --- Живлення: доступність дій та відкладений сон/гібернація ---
+_delayed_power_timer = None
+
+
+def _power_capabilities() -> dict:
+    """Які стани живлення підтримує ПК. shutdown/restart/lock — завжди.
+    sleep/hibernate — залежить від системи (powercfg /a)."""
+    caps = {"shutdown": True, "restart": True, "lock": True,
+            "sleep": False, "hibernate": False}
+    try:
+        import subprocess
+        out = subprocess.run(["powercfg", "/a"], capture_output=True, text=True,
+                             timeout=5, creationflags=0x08000000).stdout.lower()
+        # "The following sleep states are available" — потім список.
+        # Standby (S3)/(S0) => сон; Hibernate => гібернація.
+        if "standby" in out or "sleep" in out:
+            caps["sleep"] = True
+        if "hibernate" in out or "hibernation" in out:
+            caps["hibernate"] = True
+    except Exception as e:
+        logger.warning("powercfg /a error: %s", e)
+    return caps
+
+
+def _cancel_delayed_power() -> None:
+    global _delayed_power_timer
+    if _delayed_power_timer is not None:
+        try:
+            _delayed_power_timer.cancel()
+        except Exception:
+            pass
+        _delayed_power_timer = None
+
+
+def _schedule_delayed_power(seconds: int, fn) -> None:
+    """Відкладено виконує сон/гібернацію (Windows не планує їх нативно)."""
+    global _delayed_power_timer
+    _cancel_delayed_power()
+    _delayed_power_timer = threading.Timer(seconds, fn)
+    _delayed_power_timer.daemon = True
+    _delayed_power_timer.start()
+
+
+def _list_monitors() -> list[dict]:
+    """Монітори з гарними назвами та координатами (bbox для скріншота).
+    Індекс 0 — головний. Назва: «Монітор 1 (1920×1080)» + [Головний]."""
+    out = []
+    try:
+        import win32api
+
+        primary = None
+        raw = []
+        for i, (hmon, _, rect) in enumerate(win32api.EnumDisplayMonitors()):
+            info = win32api.GetMonitorInfo(hmon)
+            work = info.get("Monitor", rect)  # (left, top, right, bottom)
+            is_primary = bool(info.get("Flags", 0) & 1)  # MONITORINFOF_PRIMARY
+            raw.append((work, is_primary))
+            if is_primary:
+                primary = len(raw) - 1
+        # головний — першим
+        order = ([primary] if primary is not None else []) + \
+                [i for i in range(len(raw)) if i != primary]
+        for pos, i in enumerate(order):
+            (l, t, r, b), is_primary = raw[i]
+            out.append({
+                "index": pos,
+                "name": f"Монітор {pos + 1} ({r - l}x{b - t})"
+                        + (" • Головний" if is_primary else ""),
+                "bbox": [l, t, r, b],
+                "primary": is_primary,
+            })
+    except Exception as e:
+        logger.warning("EnumDisplayMonitors error: %s", e)
+        # запасний варіант — лише головний
+        try:
+            w = ctypes.windll.user32.GetSystemMetrics(0)
+            h = ctypes.windll.user32.GetSystemMetrics(1)
+            out = [{"index": 0, "name": f"Головний ({w}x{h})",
+                    "bbox": [0, 0, w, h], "primary": True}]
+        except Exception:
+            pass
+    return out
 
 
 def _open_clipboard_retry(u32, attempts: int = 10) -> bool:
@@ -164,33 +263,65 @@ function go(){{
 </script></body></html>"""
         return html
 
-    @app.get("/shutdown")
+    @app.get("/power")
     @require_device(dangerous=True)
-    def shutdown():
+    def power():
+        """
+        Єдина команда живлення: action = shutdown|restart|sleep|hibernate|lock|cancel.
+        minutes=0 → одразу; >0 → через таймер (для shutdown/restart; sleep/hibernate
+        Windows не вміє планувати нативно, тож для них таймер робимо самі — відкладено).
+        cancel → скасувати заплановане вимкнення/перезапуск.
+        """
         import os
-        logger.info("Shutdown command received")
-        REGISTRY.update(SVC_API, detail="Команда: вимкнення", touch=True)
-        os.system("shutdown /s /t 0")
-        return "Shutting down..."
-
-    @app.get("/shutdown_timer")
-    @require_device(dangerous=True)
-    def shutdown_timer():
-        import os
+        action = request.args.get("action", "shutdown")
         try:
-            minutes = int(request.args.get("minutes", "0"))
+            minutes = max(0, int(request.args.get("minutes", "0")))
         except ValueError:
             return "Error: minutes must be a number", 400
+        secs = minutes * 60
 
-        if minutes == 0:
-            logger.info("Canceling scheduled shutdown")
+        if action == "cancel":
             os.system("shutdown /a")
-            return "Shutdown canceled"
-        seconds = minutes * 60
-        logger.info("Scheduled shutdown in %s minutes", minutes)
-        REGISTRY.update(SVC_API, detail=f"Заплановано вимкнення ({minutes} хв)", touch=True)
-        os.system(f"shutdown /s /f /t {seconds}")
-        return f"PC will shut down in {minutes} minutes"
+            _cancel_delayed_power()
+            REGISTRY.update(SVC_API, detail="Скасовано заплановане живлення", touch=True)
+            return "Скасовано"
+
+        if action == "lock":
+            ctypes.windll.user32.LockWorkStation()
+            REGISTRY.update(SVC_API, detail="ПК заблоковано", touch=True)
+            return "ПК заблоковано"
+
+        if action == "shutdown":
+            os.system(f"shutdown /s /f /t {secs}")
+            REGISTRY.update(SVC_API, detail=f"Вимкнення через {minutes} хв" if minutes else "Вимкнення", touch=True)
+            return f"Вимкнення через {minutes} хв" if minutes else "Вимкнення…"
+
+        if action == "restart":
+            os.system(f"shutdown /r /f /t {secs}")
+            REGISTRY.update(SVC_API, detail=f"Перезапуск через {minutes} хв" if minutes else "Перезапуск", touch=True)
+            return f"Перезапуск через {minutes} хв" if minutes else "Перезапуск…"
+
+        if action in ("sleep", "hibernate"):
+            hib = "true" if action == "hibernate" else "false"
+            def _do_sleep():
+                # SetSuspendState(bHibernate, bForce, bWakeupEventsDisabled)
+                ctypes.windll.powrprof.SetSuspendState(
+                    1 if action == "hibernate" else 0, 1, 0)
+            if minutes:
+                _schedule_delayed_power(secs, _do_sleep)
+                REGISTRY.update(SVC_API, detail=f"{action} через {minutes} хв", touch=True)
+                return f"{'Гібернація' if action=='hibernate' else 'Сон'} через {minutes} хв"
+            _do_sleep()
+            REGISTRY.update(SVC_API, detail=action, touch=True)
+            return "Сон…" if action == "sleep" else "Гібернація…"
+
+        return f"Unknown action: {action}", 400
+
+    @app.get("/power/caps")
+    @require_device
+    def power_caps():
+        """Які дії живлення доступні на цьому ПК (сон/гібернація можуть бути вимкнені)."""
+        return jsonify(_power_capabilities())
 
     @app.get("/toggle_monitor")
     @require_device(dangerous=True)
@@ -205,6 +336,12 @@ function go(){{
         os.system("displayswitch.exe /extend")
         return "Switched to 2 monitors"
 
+    @app.get("/monitors")
+    @require_device
+    def monitors_list():
+        """Список моніторів з гарними назвами для вибору перед скріншотом."""
+        return jsonify({"monitors": _list_monitors()})
+
     @app.get("/screenshot")
     @require_device
     def take_screenshot():
@@ -212,13 +349,23 @@ function go(){{
         now = datetime.datetime.now()
         filename = f"screenshot_{now.strftime('%Y%m%d_%H%M%S')}.png"
         filepath = paths.SCREENSHOTS_DIR / filename
+        # monitor: індекс монітора (0 = головний за замовч.), або "all" — усі разом
+        mon = request.args.get("monitor", "0")
         try:
-            # PIL ImageGrab — потокобезпечний (pyautogui у робочому потоці Flask
-            # падав сегфолтом). Головний монітор: bbox від (0,0).
             from PIL import ImageGrab
-            main_width = ctypes.windll.user32.GetSystemMetrics(0)
-            main_height = ctypes.windll.user32.GetSystemMetrics(1)
-            img = ImageGrab.grab(bbox=(0, 0, main_width, main_height))
+            if mon == "all":
+                img = ImageGrab.grab(all_screens=True)
+            else:
+                mons = _list_monitors()
+                idx = int(mon) if mon.isdigit() else 0
+                if 0 <= idx < len(mons):
+                    b = mons[idx]["bbox"]
+                    img = ImageGrab.grab(bbox=tuple(b), all_screens=True)
+                else:
+                    # головний монітор (bbox від 0,0)
+                    w = ctypes.windll.user32.GetSystemMetrics(0)
+                    h = ctypes.windll.user32.GetSystemMetrics(1)
+                    img = ImageGrab.grab(bbox=(0, 0, w, h))
             img.save(str(filepath), "PNG")
             REGISTRY.update(SVC_API, detail="Зроблено скріншот", touch=True)
             return send_file(str(filepath), mimetype="image/png")
@@ -419,6 +566,79 @@ function go(){{
         except Exception as e:
             return f"Error: {e}", 500
 
+    @app.get("/processes")
+    @require_device
+    def processes():
+        """
+        Список застосунків із ВИДИМИМ ВІКНОМ (як Alt+Tab). Рятує, коли зависла
+        програма перекриває навіть диспетчер задач — з телефона можна її вбити.
+        Повертає JSON: [{"pid": 1234, "title": "...", "name": "app.exe"}].
+        """
+        try:
+            import win32gui
+            import win32process
+            import psutil
+
+            seen: dict[int, dict] = {}
+
+            def _enum(hwnd, _):
+                if not win32gui.IsWindowVisible(hwnd):
+                    return
+                title = win32gui.GetWindowText(hwnd).strip()
+                if not title:
+                    return
+                try:
+                    _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                except Exception:
+                    return
+                if not pid or pid in seen:
+                    return
+                try:
+                    name = psutil.Process(pid).name()
+                except Exception:
+                    name = ""
+                # системні оболонки не показуємо (щоб не вбити робочий стіл)
+                if name.lower() in {"explorer.exe", "applicationframehost.exe",
+                                    "textinputhost.exe", "systemsettings.exe"}:
+                    return
+                seen[pid] = {"pid": pid, "title": title[:80], "name": name.lower()}
+
+            win32gui.EnumWindows(_enum, None)
+            items = sorted(seen.values(), key=lambda d: d["title"].lower())
+            return jsonify({"processes": items})
+        except Exception as e:
+            logger.error("processes error: %s", e)
+            return jsonify({"processes": [], "error": str(e)}), 500
+
+    @app.get("/kill")
+    @require_device(dangerous=True)
+    def kill_process():
+        """Завершує процес за PID (з телефона). Спершу м'яко (terminate),
+        якщо не помер за 1.5с — жорстко (kill)."""
+        try:
+            pid = int(request.args.get("pid", ""))
+        except ValueError:
+            return "Error: pid must be a number", 400
+        try:
+            import psutil
+            proc = psutil.Process(pid)
+            name = proc.name()
+            proc.terminate()
+            try:
+                proc.wait(timeout=1.5)
+            except Exception:
+                proc.kill()  # не закрився чемно — вбиваємо жорстко
+            REGISTRY.update(SVC_API, detail=f"Закрито: {name}", touch=True)
+            logger.info("Killed process %s (pid %s)", name, pid)
+            return f"Закрито: {name}"
+        except psutil.NoSuchProcess:
+            return "Процес уже не працює", 200
+        except psutil.AccessDenied:
+            return "Немає прав закрити цей процес (запусти PC Control від адміністратора)", 403
+        except Exception as e:
+            logger.error("kill error: %s", e)
+            return f"Error: {e}", 500
+
     @app.get("/brightness")
     @require_device
     def brightness_set():
@@ -500,10 +720,16 @@ function go(){{
     @require_device
     def manifest():
         """
-        Динамічний опис команд ПК. Телефон малює сітку з цього — нові команди
-        з'являються без оновлення додатка.
+        Динамічний опис команд ПК, адаптований під МОЖЛИВОСТІ цього ПК: недоступні
+        дії живлення (напр. гібернація) і зайві команди (Монітори при 1 екрані)
+        не потрапляють у сітку телефона.
         """
-        return jsonify(commands.build_manifest())
+        try:
+            monitors = len(_list_monitors()) or 2
+        except Exception:
+            monitors = 2
+        caps = {"power": _power_capabilities(), "monitors": monitors}
+        return jsonify(commands.build_manifest(caps))
 
     return app
 
