@@ -98,18 +98,21 @@ class GridScreen(ft.Container):
     def _apply_grid_config(self) -> None:
         s = self.storage.get_settings()
         align = s.get("align", "center")
-        # GridView ЗАВЖДИ expand=True — інакше при багатьох іконках (напр. 2 колонки)
-        # сітка не мала обмеженої висоти й НЕ СКРОЛИЛАСЬ, вміст обрізався. Скрол
-        # важливіший за вертикальне центрування.
+        # GridView expand=True + власний скрол: коли іконок багато — гортається;
+        # вертикальне вирівнювання застосовуємо до обгортки-Column. Щоб center/bottom
+        # працювали, коли вміст ВЛАЗИТЬ, і водночас був скрол коли НЕ влазить —
+        # GridView сам скролиться (expand дає йому обмежену висоту), а alignment
+        # обгортки зсуває сітку в межах вільного місця.
         self._grid.expand = True
+        self._grid.runs_count = int(s.get("columns", 4))
         if hasattr(self, "_grid_col"):
+            self._grid_col.horizontal_alignment = ft.CrossAxisAlignment.STRETCH
             self._grid_col.alignment = {
                 "top": ft.MainAxisAlignment.START,
                 "center": ft.MainAxisAlignment.CENTER,
                 "bottom": ft.MainAxisAlignment.END,
             }.get(align, ft.MainAxisAlignment.CENTER)
-        self._grid.runs_count = int(s.get("columns", 4))
-        self._align = s.get("align", "center")
+        self._align = align
 
     def apply_settings(self) -> None:
         """Перезастосувати налаштування вигляду (після зміни в Налаштуваннях)."""

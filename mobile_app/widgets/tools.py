@@ -133,20 +133,83 @@ def build_monitor_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
         dur_lbl = ft.Text("", color=theme.TEXT_DIM, size=12)
         cores_wrap = ft.Row(wrap=True, spacing=6, run_spacing=6)
 
-        def _stat_card(title, m, unit="%", color=None):
-            def f(v):
-                return f"{v}{unit}" if v is not None else "—"
-            col = color or theme.ACCENT
+        def _load_color(v):
+            if v is None:
+                return theme.TEXT_DIM
+            return theme.DANGER if v >= 85 else (theme.WARN if v >= 60 else theme.OK)
+
+        def _big_card(title, load_m, temp_m, extra=None):
+            """Велика плитка (CPU/GPU): величезне навантаження, темп у кутку."""
+            load = (load_m or {}).get("last")
+            avg = (load_m or {}).get("avg")
+            temp = (temp_m or {}).get("last") if temp_m else None
+            head = [ft.Text(title, color=theme.TEXT, size=16, weight=ft.FontWeight.BOLD,
+                            expand=True)]
+            if temp is not None:
+                head.append(ft.Container(
+                    bgcolor=theme.SURFACE_HI, border_radius=8,
+                    padding=theme.pad(h=10, v=4),
+                    content=ft.Text(f"{temp:.0f}°C", color=theme.WARN, size=15,
+                                    weight=ft.FontWeight.BOLD)))
+            inner = [
+                ft.Row(head),
+                ft.Row([
+                    ft.Text(f"{load:.0f}" if load is not None else "—",
+                            color=_load_color(load), size=52, weight=ft.FontWeight.BOLD),
+                    ft.Text("%", color=_load_color(load), size=22),
+                    ft.Container(expand=True),
+                    ft.Text(f"сер {avg:.0f}%" if avg is not None else "",
+                            color=theme.TEXT_DIM, size=13),
+                ], vertical_alignment=ft.CrossAxisAlignment.END),
+            ]
+            if extra:
+                inner.append(extra)
+            return ft.Container(
+                bgcolor=theme.SURFACE, border_radius=16, padding=theme.pad(h=16, v=12),
+                border=theme.border_all(1, theme.BORDER),
+                content=ft.Column(inner, spacing=6),
+            )
+
+        def _core_box(pct):
+            """Прямокутник ядра: колір-заливка за навантаженням + % всередині."""
+            c = _load_color(pct)
+            return ft.Container(
+                width=44, height=34, border_radius=6,
+                bgcolor=theme.SURFACE_HI, border=theme.border_all(1, c),
+                alignment=ft.Alignment.CENTER,
+                content=ft.Text(f"{pct:.0f}", size=12, color=c, weight=ft.FontWeight.BOLD),
+            )
+
+        def _mem_bar(title, used, total, color):
+            """Плашка памʼяті: % + used/total ГБ + смужка заповнення."""
+            pct = round(used / total * 100) if (used and total) else 0
             return ft.Container(
                 bgcolor=theme.SURFACE, border_radius=12, padding=theme.pad(h=14, v=10),
                 border=theme.border_all(1, theme.BORDER), expand=True,
                 content=ft.Column([
                     ft.Row([ft.Text(title, color=theme.TEXT_DIM, size=12, expand=True),
-                            ft.Text(f(m.get("last")), color=col, size=20,
-                                    weight=ft.FontWeight.BOLD)]),
-                    ft.Text(f"сер {f(m.get('avg'))} · мін {f(m.get('min'))} · макс {f(m.get('max'))}",
-                            color=theme.TEXT_DIM, size=10),
-                ], spacing=3),
+                            ft.Text(f"{pct}%", color=color, size=18, weight=ft.FontWeight.BOLD)]),
+                    ft.Text(f"{used} / {total} ГБ" if (used is not None and total) else "—",
+                            color=theme.TEXT, size=13),
+                    ft.ProgressBar(value=pct / 100, color=color, bgcolor=theme.SURFACE_HI),
+                ], spacing=5),
+            )
+
+        def _disk_row(d):
+            pct = d.get("pct", 0)
+            return ft.Container(
+                bgcolor=theme.SURFACE, border_radius=10, padding=theme.pad(h=12, v=8),
+                border=theme.border_all(1, theme.BORDER),
+                content=ft.Column([
+                    ft.Row([
+                        ft.Text(f"Диск {d.get('letter','')}", color=theme.TEXT, size=13,
+                                weight=ft.FontWeight.BOLD, expand=True),
+                        ft.Text(f"{d.get('used_gb')} / {d.get('total_gb')} ГБ · {pct:.0f}%",
+                                color=theme.TEXT_DIM, size=12),
+                    ]),
+                    ft.ProgressBar(value=pct / 100,
+                                   color=_load_color(pct), bgcolor=theme.SURFACE_HI),
+                ], spacing=5),
             )
 
         def render(data: dict):
@@ -154,49 +217,61 @@ def build_monitor_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
             win_lbl.value = "▶ " + (data.get("active_window") or "—")
             dur_lbl.value = (f"сесія {data.get('duration_sec', 0)} с · "
                              + ("● запис" if data.get("running") else "стоп"))
-            cards = [
-                ft.Row([_stat_card("CPU", m.get("cpu", {})),
-                        _stat_card("GPU", m.get("gpu", {}), color=theme.OK)], spacing=8),
-                ft.Row([_stat_card("RAM", m.get("ram", {}), color="#c58af9"),
-                        _stat_card("Відеопам'ять", m.get("gpu_mem", {}), color="#c58af9")], spacing=8),
-            ]
-            temps = []
-            if (m.get("cpu_temp") or {}).get("last") is not None:
-                temps.append(_stat_card("CPU темп", m["cpu_temp"], unit="°", color=theme.WARN))
-            if (m.get("gpu_temp") or {}).get("last") is not None:
-                temps.append(_stat_card("GPU темп", m["gpu_temp"], unit="°", color=theme.WARN))
-            if temps:
-                cards.append(ft.Row(temps, spacing=8))
+            # CPU: велика плитка + ядра прямокутниками
             cores = data.get("cores", [])
-            cores_wrap.controls = [
-                ft.Container(bgcolor=theme.SURFACE_HI, border_radius=8,
-                             padding=theme.pad(h=8, v=4),
-                             content=ft.Text(f"{i}: {c:.0f}%", size=11,
-                                             color=theme.DANGER if c > 85 else theme.TEXT))
-                for i, c in enumerate(cores)
+            cores_wrap.controls = [_core_box(c) for c in cores]
+            cpu_extra = ft.Column([
+                ft.Text(f"Ядра ({len(cores)})", color=theme.TEXT_DIM, size=11),
+                cores_wrap], spacing=4)
+            # GPU: назва + вати
+            gpu_power = (m.get("gpu_power") or {}).get("last")
+            gpu_name = data.get("gpu_name", "")
+            gpu_extra = ft.Row([
+                ft.Text(gpu_name, color=theme.TEXT_DIM, size=11, expand=True,
+                        max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                ft.Text(f"{gpu_power} Вт" if gpu_power is not None else "",
+                        color=theme.OK, size=13, weight=ft.FontWeight.BOLD),
+            ])
+            cards = [
+                _big_card("CPU", m.get("cpu"), m.get("cpu_temp"), extra=cpu_extra),
+                _big_card("GPU", m.get("gpu"), m.get("gpu_temp"), extra=gpu_extra),
+                ft.Row([
+                    _mem_bar("RAM", data.get("ram_used_gb"), data.get("ram_total_gb"), "#c58af9"),
+                    _mem_bar("Відеопам'ять", data.get("vram_used_gb"),
+                             data.get("vram_total_gb"), "#5fb0ff"),
+                ], spacing=8),
             ]
-            cards.append(ft.Text("Ядра CPU", color=theme.TEXT_DIM, size=12))
-            cards.append(cores_wrap)
+            disks = data.get("disks", [])
+            if disks:
+                cards.append(ft.Text("Диски", color=theme.TEXT_DIM, size=12))
+                cards.extend(_disk_row(d) for d in disks)
             grid.controls = cards
             try:
                 ctx.page.update()
             except Exception:
                 pass
 
+        tick = {"n": 0}
+
         async def _loop():
-            # asyncio-цикл: надійно оновлює UI на Android (на відміну від
-            # while+sleep у потоці, що не рендерив). HTTP у to_thread, щоб не блокувати.
+            # asyncio-цикл через run_task. Діагностика: показуємо стан у dur_lbl,
+            # щоб бачити, чи цикл живий і де падає (замість тихого except).
             try:
                 await asyncio.to_thread(ctx.client.get_text, f"{base}/start")
             except Exception as e:
-                ctx.toast(str(e), error=True)
+                dur_lbl.value = f"start помилка: {str(e)[:60]}"
+                try: ctx.page.update()
+                except Exception: pass
                 return
             while state["running"]:
                 try:
                     data = await asyncio.to_thread(ctx.client.get_json, f"{base}/data")
+                    tick["n"] += 1
                     render(data)
-                except Exception:
-                    pass
+                except Exception as e:
+                    dur_lbl.value = f"тік {tick['n']} помилка: {str(e)[:70]}"
+                    try: ctx.page.update()
+                    except Exception: pass
                 await asyncio.sleep(1.0)
 
         def _do(word):
@@ -249,13 +324,33 @@ def build_monitor_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
 def _show_stats(ctx: WidgetContext, data: dict):
     m = data.get("metrics", {})
     dur = data.get("duration_sec", 0)
-    lines = [f"Статистика моніторингу ({dur} с):"]
-    names = {"cpu": "CPU %", "ram": "RAM %", "gpu": "GPU %", "gpu_mem": "Відеопам'ять %",
-             "cpu_temp": "CPU °C", "gpu_temp": "GPU °C"}
-    for k, label in names.items():
-        a = m.get(k, {})
-        if a.get("avg") is not None:
-            lines.append(f"{label}: сер {a['avg']}, мін {a['min']}, макс {a['max']}")
+    mm, ss = divmod(dur, 60)
+    dur_str = f"{mm} хв {ss} с" if mm else f"{ss} с"
+    lines = [f"📊 Сесія моніторингу · {dur_str}", ""]
+
+    def line(label, key, unit="%", show_min=False):
+        a = m.get(key, {})
+        if a.get("avg") is None:
+            return
+        s = f"{label}: сер {a['avg']}{unit} · макс {a['max']}{unit}"
+        if show_min:
+            s += f" · мін {a['min']}{unit}"
+        lines.append(s)
+
+    # корисне геймеру: навантаження (сер+макс), температури (сер+макс, важливий пік)
+    line("CPU навантаження", "cpu")
+    line("GPU навантаження", "gpu")
+    if (m.get("cpu_temp") or {}).get("avg") is not None:
+        line("CPU температура", "cpu_temp", "°")
+    if (m.get("gpu_temp") or {}).get("avg") is not None:
+        line("GPU температура", "gpu_temp", "°")
+    # памʼять — лише пік (min/сер не цікаві геймеру)
+    ram = m.get("ram", {})
+    if ram.get("max") is not None:
+        lines.append(f"RAM пік: {ram['max']}%")
+    vram = m.get("gpu_mem", {})
+    if vram.get("max") is not None:
+        lines.append(f"Відеопам'ять пік: {vram['max']}%")
     text = "\n".join(lines)
 
     async def copy():

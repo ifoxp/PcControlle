@@ -68,27 +68,45 @@ class _Monitor:
             "cpu": _Agg(), "ram": _Agg(),
             "gpu": _Agg(), "gpu_mem": _Agg(),
             "cpu_temp": _Agg(), "gpu_temp": _Agg(),
+            "gpu_power": _Agg(),
         }
         self.cores_last = []        # % по ядрах (останній замір)
         self.active_window = ""
         self.started_at = time.time()
+        # абсолютні значення (поточні, не агреговані)
+        self.ram_used_gb = self.ram_total_gb = None
+        self.vram_used_gb = self.vram_total_gb = None
+        self.gpu_name = ""
+        self.disks = []
 
     # ---------------- метрики ----------------
     def _read_gpu(self):
-        """(gpu_util%, gpu_mem%, gpu_temp) через nvidia-smi. None якщо недоступно."""
+        """dict з даними GPU через nvidia-smi (util%, mem%, ГБ, temp, вати).
+        Порожній dict, якщо недоступно."""
         try:
             import subprocess
             out = subprocess.run(
                 ["nvidia-smi",
-                 "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu",
+                 "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu,"
+                 "power.draw,name",
                  "--format=csv,noheader,nounits"],
                 capture_output=True, text=True, timeout=4,
                 creationflags=0x08000000).stdout.strip().split("\n")[0]
-            util, used, total, temp = [x.strip() for x in out.split(",")]
-            mem_pct = round(float(used) / float(total) * 100, 1) if float(total) else None
-            return float(util), mem_pct, float(temp)
+            parts = [x.strip() for x in out.split(",")]
+            util, used, total, temp, power = parts[:5]
+            name = parts[5] if len(parts) > 5 else ""
+            used_mb, total_mb = float(used), float(total)
+            return {
+                "util": float(util),
+                "mem_pct": round(used_mb / total_mb * 100, 1) if total_mb else None,
+                "mem_used_gb": round(used_mb / 1024, 1),
+                "mem_total_gb": round(total_mb / 1024, 1),
+                "temp": float(temp),
+                "power": round(float(power)) if power not in ("", "[N/A]") else None,
+                "name": name,
+            }
         except Exception:
-            return None, None, None
+            return {}
 
     def _read_temps_lhm(self):
         """CPU/GPU температура через LibreHardwareMonitor (опційно). (cpu_t, gpu_t)."""
@@ -141,25 +159,56 @@ class _Monitor:
         import psutil
         cpu = psutil.cpu_percent(interval=None)
         cores = psutil.cpu_percent(interval=None, percpu=True)
-        ram = psutil.virtual_memory().percent
-        gpu, gpu_mem, gpu_temp = self._read_gpu()
+        vm = psutil.virtual_memory()
+        ram = vm.percent
+        g = self._read_gpu()
         cpu_temp, gpu_temp_lhm = self._read_temps_lhm()
-        if gpu_temp_lhm is not None:
-            gpu_temp = gpu_temp_lhm  # LHM точніший, якщо є
+        gpu_temp = gpu_temp_lhm if gpu_temp_lhm is not None else g.get("temp")
 
         with self._lock:
             self.metrics["cpu"].add(cpu)
             self.metrics["ram"].add(ram)
-            if gpu is not None:
-                self.metrics["gpu"].add(gpu)
-            if gpu_mem is not None:
-                self.metrics["gpu_mem"].add(gpu_mem)
+            if g.get("util") is not None:
+                self.metrics["gpu"].add(g["util"])
+            if g.get("mem_pct") is not None:
+                self.metrics["gpu_mem"].add(g["mem_pct"])
             if cpu_temp is not None:
                 self.metrics["cpu_temp"].add(cpu_temp)
             if gpu_temp is not None:
                 self.metrics["gpu_temp"].add(gpu_temp)
+            if g.get("power") is not None:
+                self.metrics["gpu_power"].add(g["power"])
             self.cores_last = [round(c, 1) for c in cores]
             self.active_window = self._active_window_title()
+            # абсолютні значення (не агрегуємо — показуємо поточні)
+            self.ram_used_gb = round(vm.used / 1024**3, 1)
+            self.ram_total_gb = round(vm.total / 1024**3, 1)
+            self.vram_used_gb = g.get("mem_used_gb")
+            self.vram_total_gb = g.get("mem_total_gb")
+            self.gpu_name = g.get("name", "")
+            self.disks = self._read_disks()
+
+    def _read_disks(self):
+        """Диски: [{letter, used_gb, total_gb, pct}]. Лише фіксовані."""
+        import psutil
+        out = []
+        try:
+            for p in psutil.disk_partitions(all=False):
+                if "cdrom" in p.opts or not p.fstype:
+                    continue
+                try:
+                    u = psutil.disk_usage(p.mountpoint)
+                except Exception:
+                    continue
+                out.append({
+                    "letter": p.device.replace("\\", ""),
+                    "used_gb": round(u.used / 1024**3, 1),
+                    "total_gb": round(u.total / 1024**3, 1),
+                    "pct": round(u.percent, 1),
+                })
+        except Exception:
+            pass
+        return out
 
     def _run(self):
         import psutil
@@ -203,6 +252,12 @@ class _Monitor:
                 "active_window": self.active_window,
                 "cores": self.cores_last,
                 "metrics": data,
+                "ram_used_gb": self.ram_used_gb,
+                "ram_total_gb": self.ram_total_gb,
+                "vram_used_gb": self.vram_used_gb,
+                "vram_total_gb": self.vram_total_gb,
+                "gpu_name": self.gpu_name,
+                "disks": self.disks,
             }
 
 
