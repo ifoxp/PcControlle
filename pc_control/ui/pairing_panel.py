@@ -30,22 +30,74 @@ from ..core.logging_setup import get_logger
 logger = get_logger("pairing_panel")
 
 
-def _qr_pixmap(text: str, size: int = 220) -> QPixmap:
-    """Рендерить QR-код у QPixmap. Порожній піксмап, якщо qrcode недоступний."""
-    try:
-        import qrcode
+def _build_qr_image(text: str):
+    """Будує PIL-зображення QR. Тут може статися ГЛИБОКА рекурсія у qrcode
+    (Polynomial.__mod__ ділить поліноми рекурсивно). Викликати треба з потоку з
+    великим стеком (див. _qr_pixmap), щоб рекурсія впиралась у RecursionError,
+    а не в нативний stack overflow, що валив увесь EXE."""
+    import qrcode
 
-        qr = qrcode.QRCode(border=2, box_size=8)
-        qr.add_data(text)
-        qr.make(fit=True)
-        img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
+    # Низька корекція L — менше даних, менший шанс виродження в поліномах.
+    # fit=True з автопідбором версії безпечний ЛИШЕ тому, що цей код працює в
+    # потоці з піднятим лімітом рекурсії: якщо qrcode піде в патологічну рекурсію,
+    # спрацює RecursionError (ловиться), а не нативний stack overflow (валив EXE).
+    qr = qrcode.QRCode(
+        error_correction=qrcode.constants.ERROR_CORRECT_L,
+        border=2,
+        box_size=8,
+    )
+    qr.add_data(text)
+    qr.make(fit=True)
+    return qr.make_image(fill_color="black", back_color="white").convert("RGB")
+
+
+def _qr_pixmap(text: str, size: int = 220) -> QPixmap:
+    """Рендерить QR-код у QPixmap. Порожній піксмап при будь-якій помилці.
+
+    Генерацію виконуємо в окремому потоці з ВЕЛИКИМ стеком і піднятим лімітом
+    рекурсії: баг у бібліотеці qrcode (нескінченна рекурсія Polynomial.__mod__)
+    інакше давав нативний stack overflow, що валив увесь застосунок — звичайний
+    try/except такий краш не ловить."""
+    import sys
+    import threading
+
+    result = {}
+
+    def worker():
+        old_limit = sys.getrecursionlimit()
+        try:
+            # ліміт нижчий за ємність великого стеку -> Python кине RecursionError
+            # (ловиться) РАНІШЕ, ніж переповниться нативний C-стек (фатально)
+            sys.setrecursionlimit(20000)
+            result["img"] = _build_qr_image(text)
+        except Exception as e:  # RecursionError теж сюди
+            result["err"] = e
+        finally:
+            sys.setrecursionlimit(old_limit)
+
+    # 64 МБ стек — з запасом на глибоку рекурсію qrcode, але скінченний
+    try:
+        threading.stack_size(64 * 1024 * 1024)
+    except (ValueError, RuntimeError):
+        pass
+    t = threading.Thread(target=worker, name="qr_render", daemon=True)
+    t.start()
+    t.join(timeout=8)
+
+    if t.is_alive() or "img" not in result:
+        err = result.get("err", "таймаут генерації")
+        logger.error("Не вдалося згенерувати QR: %s", err)
+        return QPixmap()
+
+    try:
+        img = result["img"]
         data = img.tobytes("raw", "RGB")
         qimg = QImage(data, img.width, img.height, img.width * 3, QImage.Format_RGB888)
         return QPixmap.fromImage(qimg).scaled(
             size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation
         )
     except Exception as e:
-        logger.error("Не вдалося згенерувати QR: %s", e)
+        logger.error("Не вдалося перетворити QR у зображення: %s", e)
         return QPixmap()
 
 

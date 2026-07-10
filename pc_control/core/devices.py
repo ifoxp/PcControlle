@@ -93,8 +93,9 @@ def _load() -> dict:
 
 
 def _save(data: dict) -> None:
-    paths.DEVICES_FILE.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    # атомарно: конкурентні touch() з потоків Flask могли лишити битий devices.json
+    paths.atomic_write_text(
+        paths.DEVICES_FILE, json.dumps(data, ensure_ascii=False, indent=2)
     )
 
 

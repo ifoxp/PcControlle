@@ -19,6 +19,11 @@ from .core.status import (
 )
 
 
+# Тримаємо файл крах-логу живим на весь процес: якщо його збере GC і закриє,
+# faulthandler писатиме у закритий дескриптор → втрата дампа. Тому — глобально.
+_CRASH_LOG_FILE = None
+
+
 def _start_services() -> None:
     """Стартує всі фонові сервіси. Кожен ізольовано, щоб падіння одного не валило інші."""
     log = get_logger("app")
@@ -57,13 +62,54 @@ def _install_excepthook() -> None:
         )
 
 
+def _open_crash_log():
+    """
+    Відкриває файл для нативних крашів (faulthandler) з ротацією ЗА 5 СЕСІЙ.
+
+    Раніше файл відкривався в режимі "w" — кожен запуск СТИРАВ дамп попереднього
+    крашу, тож справжню причину вильоту не було видно. Тепер кожна сесія пише в
+    окремий файл crash_native/session_<timestamp>.log, а старі (понад 5) чистимо.
+    Повертає відкритий файловий об'єкт (append-safe) або None.
+    """
+    import datetime
+
+    try:
+        crash_dir = paths.BASE_DIR / "crash_native"
+        crash_dir.mkdir(parents=True, exist_ok=True)
+
+        # прибираємо старі сесії, лишаючи 4 найсвіжіші (+ поточна = 5)
+        existing = sorted(
+            crash_dir.glob("session_*.log"),
+            key=lambda p: p.stat().st_mtime,
+        )
+        for old in existing[:-4]:
+            try:
+                old.unlink()
+            except Exception:
+                pass
+
+        stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        return open(crash_dir / f"session_{stamp}.log", "w", encoding="utf-8")
+    except Exception:
+        return None
+
+
 def main() -> int:
     setup_logging()
+    # ДО будь-яких COM-об'єктів: серіалізувати comtypes Release, щоб GC у чужому
+    # потоці не робив крос-апартментний Release (це валило EXE — див. com_guard).
+    from .core import com_guard
+    com_guard.install()
     _install_excepthook()
-    # faulthandler: ловить навіть нативні краші (Access Violation) і пише C-стек у лог
+    # faulthandler: ловить навіть нативні краші (Access Violation) і пише C-стек у лог.
+    # Лог тримаємо ВІДКРИТИМ на весь час життя процесу (не закриваємо), щоб дамп
+    # устиг записатись у момент нативного крашу.
+    global _CRASH_LOG_FILE
     try:
         import faulthandler
-        faulthandler.enable(open(paths.BASE_DIR / "crash_native.log", "w"))
+        _CRASH_LOG_FILE = _open_crash_log()
+        if _CRASH_LOG_FILE is not None:
+            faulthandler.enable(_CRASH_LOG_FILE)
     except Exception:
         pass
     paths.ensure_dirs()

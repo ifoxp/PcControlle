@@ -36,11 +36,13 @@ from ..core.status import REGISTRY, SVC_VOLUME, State
 logger = get_logger("volume_manager")
 
 # --- Налаштування ---
-# App-volume-binding (прив'язка гучності застосунків до Master) вимкнено за
-# замовчуванням: pycaw GetAllSessions/CreateDevice спричиняв нативні СЕГФОЛТИ
-# процесу при зміні аудіо/дисплеїв (Python їх не ловить, весь EXE падав).
-# Пульту потрібна лише master-гучність (/volume), яка працює без цього.
-ENABLE_APP_BINDING = False
+# App-volume-binding (прив'язка гучності застосунків до Master). Раніше було
+# вимкнено, бо pycaw GetAllSessions/CreateDevice давав нативні СЕГФОЛТИ процесу.
+# ПЕРШОПРИЧИНА тих крашів — крос-потоковий COM Release під час GC (див.
+# core.com_guard) — тепер усунена: усі COM-виклики й звільнення серіалізовані
+# спільним AUDIO_LOCK. Тож прив'язку застосунків повертаємо. Запобіжник лишається:
+# після 3 помилок GetAllSessions app-session polling сам вимкнеться (_sessions_disabled).
+ENABLE_APP_BINDING = True
 
 FAST_INTERVAL = 0.1   # період основного тіку (с). На ньому й міряємо app — щоб ловити "протягування".
 SETTLE_TICKS = 4      # скільки тіків "дотискаємо" app під Master+offset після руху Master
@@ -69,6 +71,11 @@ SYSTEM_SOUNDS_KEY = "__system_sounds__"
 IGNORED_NAMES = {"audiodg.exe"}
 
 OFFSETS_PATH = paths.VOLUME_OFFSETS
+
+# Глобальний лок на ВСІ аудіо-COM виклики. Це ТОЙ САМИЙ лок, під яким com_guard
+# серіалізує comtypes Release(): активні виклики (volume_manager, Flask /volume)
+# і GC-звільнення COM з потоку Qt ніколи не накладаються → без access violation.
+from ..core.com_guard import COM_LOCK as AUDIO_LOCK
 
 
 # ---------------------------------------------------------------------------
@@ -105,8 +112,9 @@ def _load_all_offsets() -> dict:
 def _save_all_offsets(all_offsets: dict) -> None:
     try:
         payload = {"devices": {d: o for d, o in all_offsets.items() if d != "__legacy__"}}
-        with open(OFFSETS_PATH, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
+        paths.atomic_write_text(
+            OFFSETS_PATH, json.dumps(payload, ensure_ascii=False, indent=2)
+        )
     except Exception as e:
         logger.error("Не вдалося записати %s: %s", OFFSETS_PATH, e)
 
@@ -241,6 +249,7 @@ class VolumeManager:
         self._force_all = False               # підтягнути всі (reset_all)
         self._last_correction = 0.0           # час останньої періодичної корекції
         self._last_device_check = 0.0         # час останньої перевірки пристрою виводу
+        self._pending_status_master = None    # master для відкладеного оновлення статусу (поза COM-локом)
 
     # ---- керування пристроями ----
     def _select_device(self, device_id: str) -> None:
@@ -365,25 +374,41 @@ class VolumeManager:
         if known:
             self.settle = SETTLE_TICKS
         self._last_correction = 0.0
-        REGISTRY.update(SVC_VOLUME, state=State.RUNNING,
-                        detail="Зміна пристрою — застосовую прив'язки", touch=True)
+        # статус НЕ оновлюємо тут (ми під COM-локом) — це зробить tick() відкладено
 
     def _resolve_device(self):
-        """Повертає (interface, device_id) активного пристрою. Інтерфейс кешуємо,
-        але періодично (DEVICE_CHECK_INTERVAL) перевіряємо, чи не змінився пристрій."""
+        """Повертає (interface, device_id) активного пристрою.
+
+        Кешуємо інтерфейс і періодично (DEVICE_CHECK_INTERVAL) перевіряємо пристрій.
+        Кешування безпечне: GC-Release comtypes ПОДАВЛЕНО (див. com_guard), тож
+        навіть протухлий вказівник більше не валить EXE — виклик на ньому лише кине
+        Python-помилку, яку ловить run() і скидає кеш. Без кешу ж свіжа активація
+        щотіку (10/с) з no-op __del__ давала б накопичення COM-об'єктів у пам'яті."""
         now = time.monotonic()
         need_check = (self._master_if is None
                       or now - self._last_device_check >= DEVICE_CHECK_INTERVAL)
         if not need_check:
             return self._master_if, self.device_id
-
         self._last_device_check = now
         iface, dev_id = _get_master_device()
-        self._master_if = iface   # оновлюємо кеш інтерфейсу (міг змінитись пристрій)
-        return self._master_if, dev_id
+        self._master_if = iface
+        return iface, dev_id
 
     # ---- головний тік (кожні FAST_INTERVAL) ----
     def tick(self):
+        # Лок тримаємо ЛИШЕ навколо COM-операцій. Оновлення статусу (бере окремий
+        # status-лок у REGISTRY) виконуємо ПОЗА COM-локом — інакше вкладеність
+        # локів проти GUI-потоку давала deadlock (GUI тримав status-лок і чекав
+        # COM-лок у GC, а ми тримали COM-лок і чекали status-лок).
+        with AUDIO_LOCK:
+            self._tick_locked()
+        # статус оновлюємо після виходу з-під COM-лока
+        m = getattr(self, "_pending_status_master", None)
+        if m is not None:
+            self._pending_status_master = None
+            self._update_status(m)
+
+    def _tick_locked(self):
         iface, dev_id = self._resolve_device()
         master = _get_master_pct(iface)
         # GetAllSessions() — крихкий нативний виклик pycaw, що спричиняв СЕГФОЛТИ
@@ -417,13 +442,13 @@ class VolumeManager:
 
         if not self.initialized:
             self._init_state(master, sessions, dev_id)
-            self._update_status(master)
+            self._pending_status_master = master  # оновимо статус поза COM-локом
             return
 
         # зміна пристрою виводу (динаміки <-> навушники)
         if dev_id != self.device_id:
             self._switch_device(master, sessions, dev_id)
-            self._update_status(master)
+            self._pending_status_master = master
             return
 
         # запити з UI (reset) — застосувати негайно, ДО аналізу намірів
@@ -477,7 +502,7 @@ class VolumeManager:
         if self.settle > 0:
             self.settle -= 1
         self.prev_master = master
-        self._update_status(master)
+        self._pending_status_master = master  # оновимо статус поза COM-локом
 
     def _analyze_app(self, sess, name, cur, master, track: _AppTrack):
         """Детекція наміру для одного app (Master стоїть на місці)."""
@@ -637,3 +662,27 @@ def reset_all_offsets() -> None:
         _manager._save()
         _manager.request_force(None)   # усі
     logger.info("[reset] усі offset'и -> 0")
+
+
+# ---------------------------------------------------------------------------
+# Master-гучність для API (потокобезпечно — через спільний AUDIO_LOCK)
+# ---------------------------------------------------------------------------
+# Flask-ендпоінти /volume та /volume_get раніше створювали власний COM-інтерфейс
+# у потоці запиту БЕЗ синхронізації з потоком менеджера. Одночасний доступ до
+# аудіо-ендпоінта в момент DEVICE_INVALIDATED валив увесь EXE. Тепер обидва
+# ходять через ці функції під тим самим AUDIO_LOCK.
+def set_master_volume(level: int) -> None:
+    """Виставляє master-гучність (0..100) потокобезпечно."""
+    level = _clamp(level)
+    with AUDIO_LOCK:
+        ctypes.windll.ole32.CoInitialize(None)
+        iface = _get_master_interface()
+        iface.SetMasterVolumeLevelScalar(level / 100.0, None)
+
+
+def get_master_volume() -> int:
+    """Повертає поточну master-гучність (0..100) потокобезпечно."""
+    with AUDIO_LOCK:
+        ctypes.windll.ole32.CoInitialize(None)
+        iface = _get_master_interface()
+        return round(iface.GetMasterVolumeLevelScalar() * 100)

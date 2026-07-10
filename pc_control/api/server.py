@@ -30,10 +30,7 @@ import datetime
 import threading
 import webbrowser
 
-from ctypes import POINTER, cast
-from comtypes import CLSCTX_ALL
 from flask import Flask, abort, jsonify, request, send_file
-from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 from pynput.keyboard import Controller as KeyboardController, Key
 
 from . import commands
@@ -60,13 +57,15 @@ HOTKEYS = {
 }
 
 
-def _get_volume_interface():
-    ctypes.windll.ole32.CoInitialize(None)
-    speakers = AudioUtilities.GetSpeakers()
-    # новий pycaw повертає AudioDevice-обгортку без .Activate — беремо ._dev
-    com = speakers if hasattr(speakers, "Activate") else getattr(speakers, "_dev", speakers)
-    interface = com.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-    return cast(interface, POINTER(IAudioEndpointVolume))
+def _open_clipboard_retry(u32, attempts: int = 10) -> bool:
+    """OpenClipboard із повторами: буфер часто коротко тримає інший процес.
+    Повертає True, якщо вдалося відкрити (тоді викликач зобов'язаний CloseClipboard)."""
+    import time
+    for _ in range(attempts):
+        if u32.OpenClipboard(0):
+            return True
+        time.sleep(0.05)
+    return False
 
 
 def _brightness_cmd(*args) -> str | None:
@@ -208,8 +207,10 @@ def create_app() -> Flask:
         except ValueError:
             return "Error: level must be a number 0-100", 400
         try:
-            vol = _get_volume_interface()
-            vol.SetMasterVolumeLevelScalar(level / 100.0, None)
+            # через volume_manager під спільним AUDIO_LOCK: інакше одночасний
+            # COM-доступ з потоку менеджера валив увесь EXE при зміні пристрою.
+            from ..services import volume_manager
+            volume_manager.set_master_volume(level)
             logger.info("Volume set to %s%%", level)
             return f"Volume set to {level}%"
         except Exception as e:
@@ -220,8 +221,8 @@ def create_app() -> Flask:
     @require_device
     def volume_get():
         try:
-            vol = _get_volume_interface()
-            return str(round(vol.GetMasterVolumeLevelScalar() * 100))
+            from ..services import volume_manager
+            return str(volume_manager.get_master_volume())
         except Exception as e:
             return f"Error: {e}", 500
 
@@ -245,6 +246,7 @@ def create_app() -> Flask:
             k32.GlobalLock.restype = c_void_p
             k32.GlobalLock.argtypes = [c_void_p]
             k32.GlobalUnlock.argtypes = [c_void_p]
+            k32.GlobalFree.argtypes = [c_void_p]
             u32.SetClipboardData.restype = c_void_p
             u32.SetClipboardData.argtypes = [ctypes.c_uint, c_void_p]
 
@@ -253,10 +255,18 @@ def create_app() -> Flask:
             ptr = k32.GlobalLock(handle)
             ctypes.memmove(ptr, data, len(data))
             k32.GlobalUnlock(handle)
-            u32.OpenClipboard(0)
+            # OpenClipboard міг не спрацювати (буфер тримає інший процес). Тоді НЕ
+            # можна викликати SetClipboardData — і треба звільнити пам'ять самим,
+            # інакше витік + невизначений стан. Кілька спроб із коротким очікуванням.
+            if not _open_clipboard_retry(u32):
+                k32.GlobalFree(handle)
+                return "Error: буфер обміну зайнятий, спробуйте ще раз", 503
             u32.EmptyClipboard()
-            u32.SetClipboardData(CF_UNICODETEXT, handle)
-            u32.CloseClipboard()
+            if not u32.SetClipboardData(CF_UNICODETEXT, handle):
+                k32.GlobalFree(handle)  # право власності не перейшло системі
+                u32.CloseClipboard()
+                return "Error: не вдалося записати в буфер", 500
+            u32.CloseClipboard()  # після успіху пам'яттю володіє система — НЕ звільняємо
             REGISTRY.update(SVC_API, detail="Отримано текст у буфер", touch=True)
             logger.info("Clipboard set from phone (%d chars)", len(text))
             return f"Скопійовано в буфер ПК ({len(text)} символів)"
@@ -292,6 +302,7 @@ def create_app() -> Flask:
             k32.GlobalLock.restype = c_void_p
             k32.GlobalLock.argtypes = [c_void_p]
             k32.GlobalUnlock.argtypes = [c_void_p]
+            k32.GlobalFree.argtypes = [c_void_p]
             u32.SetClipboardData.restype = c_void_p
             u32.SetClipboardData.argtypes = [ctypes.c_uint, c_void_p]
 
@@ -299,9 +310,14 @@ def create_app() -> Flask:
             ptr = k32.GlobalLock(handle)
             ctypes.memmove(ptr, dib, len(dib))
             k32.GlobalUnlock(handle)
-            u32.OpenClipboard(0)
+            if not _open_clipboard_retry(u32):
+                k32.GlobalFree(handle)
+                return "Error: буфер обміну зайнятий, спробуйте ще раз", 503
             u32.EmptyClipboard()
-            u32.SetClipboardData(CF_DIB, handle)
+            if not u32.SetClipboardData(CF_DIB, handle):
+                k32.GlobalFree(handle)
+                u32.CloseClipboard()
+                return "Error: не вдалося записати в буфер", 500
             u32.CloseClipboard()
             REGISTRY.update(SVC_API, detail="Отримано зображення у буфер", touch=True)
             logger.info("Clipboard image set from phone (%d bytes)", len(raw))

@@ -77,7 +77,7 @@ def _load_set(path: Path) -> set:
 
 
 def _save_set(path: Path, data: set) -> None:
-    path.write_text(json.dumps(sorted(data), ensure_ascii=False, indent=2), encoding="utf-8")
+    paths.atomic_write_text(path, json.dumps(sorted(data), ensure_ascii=False, indent=2))
 
 
 def _copy_to_sync(filepath: Path, synced: set) -> None:

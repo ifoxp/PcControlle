@@ -82,6 +82,25 @@ TASKS_FILE = TASKS_DIR / "tasks.json"
 TASKS_ATTACHMENTS = TASKS_DIR / "attachments"
 
 
+def atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
+    """
+    Атомарний запис тексту: пишемо в тимчасовий файл поруч і os.replace().
+
+    Прямий write_text небезпечний при конкурентних записах (кілька потоків Flask
+    + фонові сервіси) або аварії посеред запису — файл лишався обрізаним/битим
+    (напр. пошкоджений devices.json). os.replace на Windows атомарний у межах
+    одного тому, тож читач завжди бачить або старий, або новий цілий файл.
+    """
+    import os
+
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", encoding=encoding) as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
 def ensure_dirs() -> None:
     """Створює директорії, які мають існувати на старті."""
     SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
