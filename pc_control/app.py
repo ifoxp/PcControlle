@@ -28,7 +28,7 @@ def _start_services() -> None:
     """Стартує всі фонові сервіси. Кожен ізольовано, щоб падіння одного не валило інші."""
     log = get_logger("app")
 
-    from .services import auto_shutdown, sorter, volume_manager
+    from .services import auto_shutdown, cloudflared, sorter, volume_manager
     from .api import server as api_server
 
     for name, starter in (
@@ -36,6 +36,7 @@ def _start_services() -> None:
         ("volume_manager", volume_manager.start_background),
         ("sorter", sorter.start_background),
         ("api", api_server.start_background),
+        ("cloudflared", cloudflared.start_background),
     ):
         try:
             starter()

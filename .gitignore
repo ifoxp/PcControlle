@@ -46,3 +46,6 @@ _*.png
 # Сторонній інструмент яскравості/моніторів (бінарник)
 MultiMonitorTool.exe
 MultiMonitorTool.cfg
+
+# Cloudflare tunnel binary (завантажується застосунком)
+cloudflared.exe

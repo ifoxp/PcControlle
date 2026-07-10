@@ -129,6 +129,11 @@ class TrayApp:
 
     def quit(self) -> None:
         logger.info("Вихід із застосунку.")
+        try:
+            from ..services import cloudflared
+            cloudflared.stop()
+        except Exception:
+            pass
         self.tray.hide()
         self.app.quit()
 

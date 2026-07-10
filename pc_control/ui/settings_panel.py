@@ -270,6 +270,29 @@ class SettingsPanel(QWidget):
         g_net.add(self.f_host)
         root.addWidget(g_net)
 
+        # --- Cloudflare тунель ---
+        g_cf = _Group("Cloudflare тунель (доступ ззовні)")
+        cf_desc = QLabel(
+            "Дозволяє керувати ПК звідусіль без білого IP і без відкритих портів. "
+            "Створи тунель у дашборді Cloudflare, встав сюди його токен і публічну "
+            "адресу (піддомен). Тоді порт на роутері можна закрити."
+        )
+        cf_desc.setObjectName("fieldHint")
+        cf_desc.setWordWrap(True)
+        g_cf.add(cf_desc)
+        self.f_public_host = _Field(
+            "Публічна адреса (піддомен)", CONFIG.api.public_host,
+            "Напр. pc1.56207556.xyz — саме цю адресу отримає телефон у QR",
+        )
+        self.f_cf_token = _Field(
+            "Cloudflare Tunnel Token", CONFIG.api.cf_tunnel_token,
+            "Довгий рядок eyJhIjoi… з екрана встановлення конектора. Секретний.",
+            password=True,
+        )
+        g_cf.add(self.f_public_host)
+        g_cf.add(self.f_cf_token)
+        root.addWidget(g_cf)
+
         # --- Пороги ---
         g_thr = _Group("Пороги")
         self.n_idle = _NumField("Вікно перевірки присутності", CONFIG.auto_shutdown_idle_minutes,
@@ -336,6 +359,8 @@ class SettingsPanel(QWidget):
             "ollama_exe": self.f_exe.value(),
             "token": self.f_token.value(),
             "api_host": self.f_host.value(),
+            "public_host": self.f_public_host.value(),
+            "cf_tunnel_token": self.f_cf_token.value(),
             "auto_shutdown_idle_minutes": self.n_idle.value(),
             "vram_limit_mb": self.n_vram.value(),
         }

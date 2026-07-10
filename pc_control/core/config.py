@@ -228,6 +228,8 @@ class AppConfig:
             "ollama_exe": "PC_OLLAMA_EXE",
             "token": "PC_CONTROL_TOKEN",
             "api_host": "PC_API_HOST",
+            "public_host": "PC_PUBLIC_HOST",
+            "cf_tunnel_token": "PC_CF_TUNNEL_TOKEN",
         }
         env_updates = {env_map[k]: str(values[k]) for k in env_map if k in values}
         if env_updates:
@@ -244,6 +246,8 @@ class AppConfig:
         if "ollama_exe" in values: self.sorter.ollama_exe = values["ollama_exe"]
         if "token" in values and values["token"]: self.token = values["token"]
         if "api_host" in values: self.api.host = values["api_host"]
+        if "public_host" in values: self.api.public_host = values["public_host"].strip()
+        if "cf_tunnel_token" in values: self.api.cf_tunnel_token = values["cf_tunnel_token"].strip()
 
         # числові перемикачі — у config.json
         if "auto_shutdown_idle_minutes" in values:
