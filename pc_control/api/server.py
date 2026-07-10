@@ -114,7 +114,7 @@ def create_app() -> Flask:
             "relation": ["delegate_permission/common.handle_all_urls"],
             "target": {
                 "namespace": "android_app",
-                "package_name": "com.shramix.pc_control",
+                "package_name": "com.shramix.pc_control_remote",
                 "sha256_cert_fingerprints": [fp],
             },
         }])
