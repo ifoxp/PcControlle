@@ -98,8 +98,10 @@ class GridScreen(ft.Container):
     def _apply_grid_config(self) -> None:
         s = self.storage.get_settings()
         align = s.get("align", "center")
-        # вертикальне вирівнювання сітки через alignment колонки (безпечно, без пружин)
-        self._grid.expand = (align == "top")
+        # GridView ЗАВЖДИ expand=True — інакше при багатьох іконках (напр. 2 колонки)
+        # сітка не мала обмеженої висоти й НЕ СКРОЛИЛАСЬ, вміст обрізався. Скрол
+        # важливіший за вертикальне центрування.
+        self._grid.expand = True
         if hasattr(self, "_grid_col"):
             self._grid_col.alignment = {
                 "top": ft.MainAxisAlignment.START,

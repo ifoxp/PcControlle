@@ -326,6 +326,37 @@ class SettingsPanel(QWidget):
         g_icon.add(self.btn_demo)
         root.addWidget(g_icon)
 
+        # --- Автозапуск з правами ---
+        g_auto = _Group("Автозапуск з правами адміністратора")
+        from ..core import autostart
+        auto_desc = QLabel(
+            "Запуск PC Control при вході в Windows із правами адміністратора — "
+            "БЕЗ вікна UAC щоразу (через Планувальник задач). Дає температуру CPU, "
+            "закриття захищених процесів, надійніші дії живлення.\n"
+            "UAC з'явиться рівно один раз — під час увімкнення."
+        )
+        auto_desc.setObjectName("fieldHint")
+        auto_desc.setWordWrap(True)
+        g_auto.add(auto_desc)
+        self._auto_status = QLabel("")
+        self._auto_status.setObjectName("fieldHint")
+        self._auto_status.setWordWrap(True)
+        auto_row = QHBoxLayout()
+        self.btn_auto_on = QPushButton("Увімкнути автозапуск")
+        self.btn_auto_on.setObjectName("primary")
+        self.btn_auto_on.clicked.connect(lambda: self._toggle_autostart(True))
+        self.btn_auto_off = QPushButton("Вимкнути")
+        self.btn_auto_off.setObjectName("ghost")
+        self.btn_auto_off.clicked.connect(lambda: self._toggle_autostart(False))
+        auto_row.addWidget(self.btn_auto_on)
+        auto_row.addWidget(self.btn_auto_off)
+        auto_row.addStretch(1)
+        auto_wrap = QWidget(); auto_wrap.setLayout(auto_row)
+        g_auto.add(auto_wrap)
+        g_auto.add(self._auto_status)
+        self._refresh_autostart_status()
+        root.addWidget(g_auto)
+
         # --- Кнопки ---
         actions = QHBoxLayout()
         actions.addStretch(1)
@@ -344,6 +375,32 @@ class SettingsPanel(QWidget):
             self._on_demo()
             self.btn_demo.setText("▶   Дивись на іконку біля годинника →")
             QTimer.singleShot(14000, lambda: self.btn_demo.setText("▶   Показати всі анімації"))
+
+    def _refresh_autostart_status(self):
+        from ..core import autostart
+        enabled = autostart.is_enabled()
+        admin = autostart.is_admin()
+        parts = []
+        parts.append("✓ Автозапуск увімкнено" if enabled else "○ Автозапуск вимкнено")
+        parts.append("права адміна активні" if admin else "зараз без прав адміна")
+        self._auto_status.setText(" · ".join(parts))
+
+    def _toggle_autostart(self, on: bool):
+        from ..core import autostart
+        if on:
+            ok, msg = autostart.enable_elevated()
+            if ok and not autostart.is_admin():
+                # задачу створено, але ПОТОЧНИЙ процес без прав — вони зʼявляться
+                # при наступному вході в Windows (Планувальник запустить з правами)
+                msg = ("✓ Автозапуск налаштовано. Права адміністратора застосуються "
+                       "при наступному вході в Windows (перезавантаж ПК або вийди/"
+                       "увійди). Тоді запрацює температура CPU й закриття захищених "
+                       "процесів.")
+        else:
+            ok, msg = autostart.disable()
+        self._auto_status.setText(msg)
+        # статус задачі оновиться після підтвердження UAC — перечитаємо трохи згодом
+        QTimer.singleShot(3000, self._refresh_autostart_status)
 
     def refresh_dynamic(self):
         """Оновити динамічні частини (список гучності) — викликати при показі панелі."""

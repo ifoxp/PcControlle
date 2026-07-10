@@ -151,11 +151,13 @@ def _check_replay(ip: str) -> bool:
 # ---------------------------------------------------------------- авторизація
 
 def _extract_token() -> str:
-    """Bearer-токен із заголовка Authorization: Bearer <token>."""
+    """Bearer-токен із заголовка Authorization: Bearer <token>.
+    Fallback: ?token= у query — потрібен ЛИШЕ для MJPEG-стріму (тег <img> на
+    телефоні не дозволяє задати заголовок). Для решти шляхів заголовок — основний."""
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
         return auth[7:].strip()
-    return ""
+    return request.args.get("token", "").strip()
 
 
 def require_device(view=None, *, dangerous: bool = False):

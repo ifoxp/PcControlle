@@ -31,6 +31,11 @@ from widgets.advanced import (
     build_power_menu_tile,
     build_process_list_tile,
 )
+from widgets.tools import (
+    build_monitor_tile,
+    build_stream_tile,
+    build_touchpad_tile,
+)
 
 _BUILDERS = {
     "button": build_button_tile,
@@ -44,6 +49,9 @@ _BUILDERS = {
     "push_clipboard": build_push_clipboard_tile,
     "process_list": build_process_list_tile,
     "power_menu": build_power_menu_tile,
+    "touchpad": build_touchpad_tile,
+    "monitor": build_monitor_tile,
+    "screen_stream": build_stream_tile,
 }
 
 

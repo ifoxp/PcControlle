@@ -32,6 +32,7 @@ import webbrowser
 
 from flask import Flask, abort, jsonify, request, send_file
 from pynput.keyboard import Controller as KeyboardController, Key
+from pynput.mouse import Controller as MouseController, Button
 
 from . import commands
 from ..core import audit, devices, paths, tls
@@ -49,6 +50,7 @@ from ..services import sorter
 
 logger = get_logger("api")
 keyboard = KeyboardController()
+mouse = MouseController()
 
 # Гарячі клавіші. Формат: (список модифікаторів, клавіша).
 # Key.cmd — це клавіша Windows (Win/Super).
@@ -57,18 +59,13 @@ HOTKEYS = {
     "alt_f4": ([Key.alt], Key.f4),
     "task_manager": ([Key.ctrl, Key.shift], Key.esc),
     # --- нові корисні (не перетинаються з наявними) ---
-    "show_desktop": ([Key.cmd], "d"),          # Win+D — згорнути/показати робочий стіл
-    "explorer": ([Key.cmd], "e"),              # Win+E — Провідник
-    "task_view": ([Key.cmd], Key.tab),         # Win+Tab — перегляд задач
     "snip": ([Key.cmd, Key.shift], "s"),       # Win+Shift+S — ножиці (скріншот області)
     "new_desktop": ([Key.cmd, Key.ctrl], "d"), # Win+Ctrl+D — новий віртуальний стіл
     "close_desktop": ([Key.cmd, Key.ctrl], Key.f4),  # Win+Ctrl+F4 — закрити вірт. стіл
     "switch_desktop_right": ([Key.cmd, Key.ctrl], Key.right),  # наступний вірт. стіл
     "switch_desktop_left": ([Key.cmd, Key.ctrl], Key.left),    # попередній вірт. стіл
-    "settings": ([Key.cmd], "i"),              # Win+I — Параметри Windows
     "emoji": ([Key.cmd], "."),                 # Win+. — панель емодзі
     "minimize_all": ([Key.cmd], "m"),          # Win+M — згорнути всі вікна
-    "run_dialog": ([Key.cmd], "r"),            # Win+R — Виконати
 }
 
 
@@ -399,12 +396,21 @@ function go(){{
             return f"Unknown action. Available: {', '.join(HOTKEYS)}", 400
         modifiers, key = HOTKEYS[action]
         logger.info("Hotkey: %s", action)
+        import time as _t
+        # Мікро-затримки ОБОВʼЯЗКОВІ: без них Windows не встигає зареєструвати
+        # модифікатор (Win/Ctrl) перед клавішею, і комбінація Win+S друкувала просто
+        # "s". Пауза дає ОС побачити натиснутий модифікатор.
         for mod in modifiers:
             keyboard.press(mod)
+            _t.sleep(0.03)
+        _t.sleep(0.02)
         keyboard.press(key)
+        _t.sleep(0.03)
         keyboard.release(key)
+        _t.sleep(0.02)
         for mod in reversed(modifiers):
             keyboard.release(mod)
+            _t.sleep(0.02)
         return f"Pressed: {action}"
 
     @app.get("/volume")
@@ -565,6 +571,133 @@ function go(){{
             return f"Media: {action}"
         except Exception as e:
             return f"Error: {e}", 500
+
+    @app.get("/mouse")
+    @require_device
+    def mouse_ctl():
+        """
+        Віддалене керування мишею (тачпад з телефона).
+          action=move  dx,dy — відносне переміщення курсору;
+          action=click button=left|right|middle — клік;
+          action=scroll dy — прокрутка (± кроки колеса).
+        Швидкі часті виклики move — тому без логування кожного руху.
+        """
+        action = request.args.get("action", "move")
+        try:
+            if action == "move":
+                dx = float(request.args.get("dx", "0"))
+                dy = float(request.args.get("dy", "0"))
+                mouse.move(int(dx), int(dy))
+                return "ok"
+            if action == "click":
+                btn = {"left": Button.left, "right": Button.right,
+                       "middle": Button.middle}.get(request.args.get("button", "left"),
+                                                    Button.left)
+                count = int(request.args.get("count", "1"))
+                mouse.click(btn, count)
+                return "ok"
+            if action == "down":
+                mouse.press(Button.left)
+                return "ok"
+            if action == "up":
+                mouse.release(Button.left)
+                return "ok"
+            if action == "scroll":
+                dy = float(request.args.get("dy", "0"))
+                mouse.scroll(0, int(dy))
+                return "ok"
+            return f"Unknown action: {action}", 400
+        except Exception as e:
+            return f"Error: {e}", 500
+
+    @app.get("/monitor/<cmd_>")
+    @require_device
+    def monitor_ctl(cmd_):
+        """Моніторинг ресурсів на вимогу: start|data|reset|stop.
+        Вимикається при stop — не жере ресурси, коли не потрібен."""
+        from ..services import monitoring
+        if cmd_ == "start":
+            monitoring.start()
+            return jsonify(monitoring.snapshot())
+        if cmd_ == "data":
+            return jsonify(monitoring.snapshot())
+        if cmd_ == "reset":
+            monitoring.reset()
+            return jsonify(monitoring.snapshot())
+        if cmd_ == "stop":
+            return jsonify(monitoring.stop())
+        return "Unknown monitor command", 400
+
+    @app.get("/stream")
+    @require_device
+    def screen_stream():
+        """
+        MJPEG-потік екрана на телефон («глянути що робить бот»). Параметри:
+          fps=1..15   — кадрів/сек (телефон міняє повзунком → перепідключення);
+          quality=20..90 — якість JPEG;
+          monitor=N|all — який екран (як у /screenshot);
+          scale=0.3..1.0 — масштаб (менше = легше на канал).
+        Потік живе, поки телефон тримає з'єднання; закрив перегляд — стрім спиниться.
+        """
+        from flask import Response
+        try:
+            fps = max(1, min(15, int(request.args.get("fps", "5"))))
+        except ValueError:
+            fps = 5
+        try:
+            quality = max(20, min(90, int(request.args.get("quality", "55"))))
+        except ValueError:
+            quality = 55
+        try:
+            scale = max(0.3, min(1.0, float(request.args.get("scale", "0.6"))))
+        except ValueError:
+            scale = 0.6
+        mon = request.args.get("monitor", "0")
+
+        # bbox монітора (для grab)
+        bbox = None
+        all_screens = False
+        if mon == "all":
+            all_screens = True
+        else:
+            mons = _list_monitors()
+            idx = int(mon) if mon.isdigit() else 0
+            if 0 <= idx < len(mons):
+                bbox = tuple(mons[idx]["bbox"])
+                all_screens = True
+
+        def generate():
+            import io
+            import time as _t
+            from PIL import ImageGrab
+            period = 1.0 / fps
+            while True:
+                start = _t.monotonic()
+                try:
+                    img = ImageGrab.grab(bbox=bbox, all_screens=all_screens) if bbox \
+                        else (ImageGrab.grab(all_screens=True) if all_screens
+                              else ImageGrab.grab())
+                    if scale < 1.0:
+                        img = img.resize((int(img.width * scale), int(img.height * scale)))
+                    buf = io.BytesIO()
+                    img.convert("RGB").save(buf, "JPEG", quality=quality)
+                    frame = buf.getvalue()
+                    yield (b"--frame\r\nContent-Type: image/jpeg\r\n"
+                           b"Content-Length: " + str(len(frame)).encode()
+                           + b"\r\n\r\n" + frame + b"\r\n")
+                except GeneratorExit:
+                    break  # телефон від'єднався — спиняємо стрім
+                except Exception as e:
+                    logger.warning("stream frame error: %s", e)
+                    break
+                # тримаємо задану частоту
+                elapsed = _t.monotonic() - start
+                if elapsed < period:
+                    _t.sleep(period - elapsed)
+
+        REGISTRY.update(SVC_API, detail=f"Стрім екрана {fps} fps", touch=True)
+        return Response(generate(),
+                        mimetype="multipart/x-mixed-replace; boundary=frame")
 
     @app.get("/processes")
     @require_device

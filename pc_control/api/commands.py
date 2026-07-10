@@ -31,12 +31,12 @@
 from __future__ import annotations
 
 # Версія маніфесту: телефон порівнює й перемальовує сітку, коли змінилась.
-MANIFEST_VERSION = 4
+MANIFEST_VERSION = 5
 
 # Дозволені типи віджетів (для валідації й документації)
 WIDGETS = {"button", "toggle", "slider", "media_view", "audio", "text_input",
            "picker", "url_clipboard", "push_clipboard", "process_list",
-           "power_menu"}
+           "power_menu", "touchpad", "monitor", "screen_stream"}
 
 
 # Порядок = порядок появи в сітці на телефоні.
@@ -94,17 +94,12 @@ COMMANDS: list[dict] = [
             {"value": "alt_tab", "label": "Alt+Tab (перемкнути вікно)"},
             {"value": "alt_f4", "label": "Alt+F4 (закрити вікно)"},
             {"value": "task_manager", "label": "Диспетчер задач"},
-            {"value": "show_desktop", "label": "Показати робочий стіл"},
             {"value": "minimize_all", "label": "Згорнути всі вікна"},
-            {"value": "explorer", "label": "Провідник"},
-            {"value": "task_view", "label": "Перегляд задач (Win+Tab)"},
             {"value": "snip", "label": "Ножиці (скріншот області)"},
             {"value": "new_desktop", "label": "Новий робочий стіл"},
             {"value": "switch_desktop_right", "label": "Наступний робочий стіл"},
             {"value": "switch_desktop_left", "label": "Попередній робочий стіл"},
             {"value": "close_desktop", "label": "Закрити робочий стіл"},
-            {"value": "settings", "label": "Параметри Windows"},
-            {"value": "run_dialog", "label": "Виконати (Win+R)"},
             {"value": "emoji", "label": "Панель емодзі"},
         ]},
     },
@@ -125,6 +120,23 @@ COMMANDS: list[dict] = [
         "widget": "push_clipboard", "method": "GET", "path": "/set_clipboard",
         "dangerous": False, "response": "text", "group": "Буфер",
         "params": {"name": "text"},
+    },
+
+    # --- Керування / інструменти ---
+    {
+        "id": "touchpad", "title": "Мишка", "icon": "mouse",
+        "widget": "touchpad", "method": "GET", "path": "/mouse",
+        "dangerous": False, "response": "text", "group": "Керування",
+    },
+    {
+        "id": "monitor", "title": "Моніторинг", "icon": "monitor_heart",
+        "widget": "monitor", "method": "GET", "path": "/monitor",
+        "dangerous": False, "response": "json", "group": "Керування",
+    },
+    {
+        "id": "screen_stream", "title": "Екран (стрім)", "icon": "cast",
+        "widget": "screen_stream", "method": "GET", "path": "/stream",
+        "dangerous": False, "response": "stream", "group": "Медіа",
     },
 
     # --- Медіа ---
