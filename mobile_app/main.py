@@ -53,51 +53,13 @@ def main(page: "ft.Page"):
     except Exception:
         pass
 
-    # --- Системний «назад» на Android через page.views ---
-    # Повноекранні екрани (мишка/монітор/стрім/скрін) відкриваються як окремий
-    # View у стеку page.views. Системний жест «назад» надійно доставляється через
-    # on_view_pop САМЕ для views — тоді ми знімаємо верхній екран, а не вбиваємо
-    # додаток. На корені (сітка) — подвійний «назад» для виходу.
-    page._exit_pending = {"ts": 0}
-    # back-стек лишаємо для callback-overlay (діалоги/редактор), що не є views
+    # back-стек для повноекранних overlay (мишка/монітор/стрім/скрін). Overlay
+    # закриваються своєю стрілкою «назад» + свайпом зліва-направо (власний жест,
+    # бо системний back на Flet-Android не доставляється надійно). Цей стек ловить
+    # системний back ЯКЩО він таки прийде (не завадить).
     page._back_stack = []
 
-    def _push_view(content, appbar_title: str = "", on_pop=None):
-        """Відкриває повноекранний екран як View (ловить системний «назад»)."""
-        view = ft.View(
-            controls=[content],
-            padding=0,
-            bgcolor="#0f1116",
-            appbar=ft.AppBar(
-                title=ft.Text(appbar_title, size=16),
-                bgcolor="#171a21", color="#e8e8ea",
-                leading=ft.IconButton(ft.Icons.ARROW_BACK,
-                                      on_click=lambda _: _pop_view()),
-            ) if appbar_title else None,
-        )
-        view._on_pop = on_pop
-        page.views.append(view)
-        page.update()
-        return view
-
-    def _pop_view():
-        if len(page.views) > 1:
-            v = page.views.pop()
-            cb = getattr(v, "_on_pop", None)
-            if cb:
-                try:
-                    cb()
-                except Exception:
-                    pass
-            page.update()
-            return True
-        return False
-
-    page._push_view = _push_view
-    page._pop_view = _pop_view
-
     def _handle_back() -> bool:
-        # 1) callback-overlay (діалоги/редактор)
         if page._back_stack:
             cb = page._back_stack.pop()
             try:
@@ -105,22 +67,7 @@ def main(page: "ft.Page"):
             except Exception:
                 pass
             return True
-        # 2) повноекранний view
-        if _pop_view():
-            return True
-        # 3) корінь (сітка) — подвійний «назад» для виходу
-        import time as _t
-        now = _t.time()
-        if now - page._exit_pending["ts"] < 2.0:
-            return False  # другий back за 2с → дозволяємо вихід
-        page._exit_pending["ts"] = now
-        try:
-            import theme as _th
-            _th.show(page, ft.SnackBar(ft.Text("Ще раз «назад» — щоб вийти",
-                                               color="white"), bgcolor="#1e222b"))
-        except Exception:
-            pass
-        return True
+        return False
 
     def _on_view_pop(e):
         _handle_back()
@@ -175,18 +122,14 @@ def main(page: "ft.Page"):
         return
 
     def show(control, with_nav=False):
-        # Основний екран = КОРЕНЕВИЙ view (page.views[0]). Повноекранні екрани
-        # (мишка/монітор/стрім/скрін) додаються поверх як page.views[1+], тож
-        # системний «назад» знімає верхній і повертає САМЕ на цей екран (а не на
-        # порожній синій фон, як було при змішуванні views+controls).
+        # Основний екран у page.controls (надійно на Flet-Android). Повноекранні
+        # екрани (мишка/монітор/стрім/скрін) — через page.overlay поверх. Навігація
+        # (таби) — page.navigation_bar.
         try:
             nav = getattr(control, "_nav_bar", None) if with_nav else None
-            root = ft.View(
-                controls=[control], padding=0, bgcolor="#0f1116",
-                navigation_bar=nav,
-            )
-            page.views.clear()
-            page.views.append(root)
+            page.navigation_bar = nav
+            page.controls.clear()
+            page.controls.append(control)
             page.update()
         except Exception:
             _error_view(page, "Рендер " + type(control).__name__, traceback.format_exc())

@@ -24,23 +24,54 @@ from widgets.base import WidgetContext, grid_tile
 
 
 def _open_view(ctx: WidgetContext, title: str, build_body, on_close=lambda: None):
+    """Повноекранний overlay (працює надійно — на відміну від page.views).
+    Закриття: AppBar-стрілка АБО свайп зліва-направо (жест «назад» власною
+    реалізацією, бо системний back на Flet-Android не ловиться)."""
     page = ctx.page
+    holder = {}
 
     def close(_=None):
         try:
-            if hasattr(page, "_pop_view"):
-                page._pop_view()
+            if holder.get("ov") in page.overlay:
+                page.overlay.remove(holder["ov"])
+            if hasattr(page, "_back_stack") and close in page._back_stack:
+                page._back_stack.remove(close)
+            on_close()
+            page.update()
         except Exception:
             pass
 
-    body = ft.Container(bgcolor=theme.BG, expand=True,
-                        padding=ft.Padding(12, 8, 12, 12),
-                        content=build_body(close))
-    if hasattr(page, "_push_view"):
-        page._push_view(body, appbar_title=title, on_pop=on_close)
-    else:
-        page.views.append(ft.View(controls=[body]))
-        page.update()
+    top = ft.Row([
+        ft.IconButton(ft.Icons.ARROW_BACK, icon_color=theme.TEXT, icon_size=26,
+                      on_click=close),
+        ft.Text(title, color=theme.TEXT, size=17, weight=ft.FontWeight.BOLD, expand=True),
+    ])
+    inner = ft.Column([top, build_body(close)], expand=True, spacing=8)
+
+    # свайп зліва-направо по всьому екрану → закрити (жест «назад»)
+    def on_pan_end(e):
+        pass
+
+    def on_h_drag(e):
+        # горизонтальний свайп вправо на достатню відстань → назад
+        d = getattr(e, "primary_delta", None) or 0
+        holder["dx"] = holder.get("dx", 0) + d
+        if holder["dx"] > 90:
+            holder["dx"] = 0
+            close()
+
+    ov = ft.GestureDetector(
+        on_horizontal_drag_update=on_h_drag,
+        on_horizontal_drag_start=lambda e: holder.update(dx=0),
+        content=ft.Container(bgcolor=theme.BG, expand=True,
+                             padding=ft.Padding(12, 40, 12, 12), content=inner),
+        expand=True,
+    )
+    holder["ov"] = ov
+    page.overlay.append(ov)
+    if hasattr(page, "_back_stack"):
+        page._back_stack.append(close)
+    page.update()
     return close
 
 
@@ -170,14 +201,37 @@ def build_monitor_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
                 content=ft.Column(inner, spacing=6),
             )
 
-        def _core_box(pct):
-            """Прямокутник ядра: колір-заливка за навантаженням + % всередині."""
+        def _thread_cell(pct):
+            """Один потік: фіксована ширина 30px (без зсувів 9%→10%),
+            вертикальна смужка-заливка знизу + % зверху."""
             c = _load_color(pct)
+            h = 30
+            fill = max(2, int(h * pct / 100))
             return ft.Container(
-                width=44, height=34, border_radius=6,
-                bgcolor=theme.SURFACE_HI, border=theme.border_all(1, c),
-                alignment=ft.Alignment.CENTER,
-                content=ft.Text(f"{pct:.0f}", size=12, color=c, weight=ft.FontWeight.BOLD),
+                width=30, height=h + 14, border_radius=5,
+                content=ft.Column([
+                    ft.Container(height=14, alignment=ft.Alignment.CENTER,
+                                 content=ft.Text(f"{pct:.0f}", size=9, color=c)),
+                    # смужка заповнення (знизу): стек із фону + заливки
+                    ft.Container(
+                        width=30, height=h, border_radius=5, bgcolor=theme.SURFACE_HI,
+                        border=theme.border_all(1, theme.BORDER),
+                        alignment=ft.Alignment.BOTTOM_CENTER,
+                        content=ft.Container(height=fill, bgcolor=c,
+                                             border_radius=4),
+                    ),
+                ], spacing=1, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+            )
+
+        def _core_box(t0, t1):
+            """Ядро = 2 потоки поруч у спільній рамці (видно, що вони разом)."""
+            cells = [_thread_cell(t0)]
+            if t1 is not None:
+                cells.append(_thread_cell(t1))
+            return ft.Container(
+                border_radius=8, padding=theme.pad(h=4, v=3),
+                bgcolor=theme.BG, border=theme.border_all(1, theme.BORDER),
+                content=ft.Row(cells, spacing=2, tight=True),
             )
 
         def _mem_bar(title, used, total, color):
@@ -219,9 +273,14 @@ def build_monitor_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
                              + ("● запис" if data.get("running") else "стоп"))
             # CPU: велика плитка + ядра прямокутниками
             cores = data.get("cores", [])
-            cores_wrap.controls = [_core_box(c) for c in cores]
+            # групуємо потоки по 2 в одне фізичне ядро (16 потоків → 8 ядер)
+            cores_wrap.controls = [
+                _core_box(cores[i], cores[i + 1] if i + 1 < len(cores) else None)
+                for i in range(0, len(cores), 2)
+            ]
+            n_cores = (len(cores) + 1) // 2
             cpu_extra = ft.Column([
-                ft.Text(f"Ядра ({len(cores)})", color=theme.TEXT_DIM, size=11),
+                ft.Text(f"Ядра ({n_cores} × 2 потоки)", color=theme.TEXT_DIM, size=11),
                 cores_wrap], spacing=4)
             # GPU: назва + вати
             gpu_power = (m.get("gpu_power") or {}).get("last")
@@ -384,8 +443,9 @@ def build_stream_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
     def open_stream():
         import os
         import tempfile
-        state = {"running": False, "fps": 4}
+        state = {"running": False, "fps": 4, "n": 0}
         img = ft.Image(fit=ft.BoxFit.CONTAIN, expand=True)
+        status = ft.Text("Підключення до екрана…", color=theme.TEXT_DIM, size=13)
         frames = [os.path.join(tempfile.gettempdir(), f"pcstream_{i}.jpg") for i in (0, 1)]
         flip = {"i": 0}
 
@@ -400,9 +460,15 @@ def build_stream_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
                         f.write(data)
                     flip["i"] ^= 1
                     img.src = p
+                    state["n"] += 1
+                    status.value = f"● наживо · кадр {state['n']}"
+                    status.color = theme.OK
                     ctx.page.update()
-                except Exception:
-                    pass
+                except Exception as e:
+                    status.value = f"помилка кадру: {str(e)[:60]}"
+                    status.color = theme.DANGER
+                    try: ctx.page.update()
+                    except Exception: pass
                 dt = asyncio.get_event_loop().time() - t0
                 await asyncio.sleep(max(0.0, 1.0 / state["fps"] - dt))
 
@@ -423,6 +489,7 @@ def build_stream_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
             controls = ft.Row([ft.Icon(ft.Icons.SPEED, color=theme.TEXT_DIM),
                                slider, fps_label], spacing=8)
             return ft.Column([
+                status,
                 ft.Container(content=img, expand=True, alignment=ft.Alignment.CENTER),
                 controls,
             ], expand=True, spacing=8)
