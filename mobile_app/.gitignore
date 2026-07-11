@@ -13,4 +13,6 @@ pcs.json
 
 # Тимчасові файли збірки
 apk_build.log
+_build_apk.log
+*.log
 assets/_mono_preview.png

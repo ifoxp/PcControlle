@@ -504,13 +504,11 @@ function go(){{
     @app.get("/screenshot")
     @require_device(high_rate=True)
     def take_screenshot():
-        logger.info("Screenshot command received")
-        now = datetime.datetime.now()
-        filename = f"screenshot_{now.strftime('%Y%m%d_%H%M%S')}.png"
-        filepath = paths.SCREENSHOTS_DIR / filename
         # monitor: індекс монітора (0 = головний за замовч.), або "all" — усі разом
         mon = request.args.get("monitor", "0")
         try:
+            import io
+            from flask import Response
             from PIL import ImageGrab
             if mon == "all":
                 img = ImageGrab.grab(all_screens=True)
@@ -525,9 +523,13 @@ function go(){{
                     w = ctypes.windll.user32.GetSystemMetrics(0)
                     h = ctypes.windll.user32.GetSystemMetrics(1)
                     img = ImageGrab.grab(bbox=(0, 0, w, h))
-            img.save(str(filepath), "PNG")
+            # Віддаємо З ПАМʼЯТІ, НЕ зберігаючи на диск. Раніше кожен кадр стріму
+            # (кілька/сек) створював файл у dist\screenshots → папка засмічувалась.
+            buf = io.BytesIO()
+            img.save(buf, "PNG")
+            buf.seek(0)
             REGISTRY.update(SVC_API, detail="Зроблено скріншот", touch=True)
-            return send_file(str(filepath), mimetype="image/png")
+            return Response(buf.getvalue(), mimetype="image/png")
         except Exception as e:
             logger.error("Error taking screenshot: %s", e)
             return f"Error: {e}", 500

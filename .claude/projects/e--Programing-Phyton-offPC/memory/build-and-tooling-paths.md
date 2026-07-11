@@ -17,6 +17,12 @@ metadata:
 3. `Start-Process "dist\PC Control.exe" -WorkingDirectory dist`
 4. Перевірка успіху: `Get-NetTCPConnection -LocalPort 5050 -State Listen` має показати процес; лог `dist\pc_control.log` без ModuleNotFoundError.
 
+**Єдиний build-скрипт** `build.ps1` (корінь): `.\build.ps1 exe` (EXE+чистий ZIP), `apk`, або `all`. EXE збирає кореневим .venv, зупиняє процес, після збірки пакує `release\PC_Control_<дата>.zip` ТІЛЬКИ з `PC Control.exe`+`README.txt` (dist_readme.txt) — без особистих файлів. APK копіює в release\ + корінь. ВАЖЛИВО: build.ps1 має бути UTF-8 З BOM (інакше PS 5.1 читає кирилицю як cp1251 → parse error); нативні виклики (PyInstaller/flet) обгорнуті `$ErrorActionPreference='Continue' + 2>&1|Out-Host + перевірка $LASTEXITCODE` (їх stderr-прогрес інакше фатальний під Stop). Артефакти в `release/` (gitignore).
+
+Скріншоти більше НЕ пишуться на диск: `/screenshot` віддає з памʼяті (io.BytesIO+Response) — раніше кожен кадр стріму створював файл у dist\screenshots. Денний cleaner `_start_screenshots_cleaner` (app.py) лишився як підстраховка для старих файлів.
+
+Видалено як мертве (11.07.2026): папка `legacy/`, `sorter_config.json`, `gemma4-vram-ram.modelfile`, дублікат-заготовка brightness у commands.py.
+
 **APK (мобільний)**: `mobile_app\build_apk.ps1` (3 кроки: flet build → patch_manifest → flutter build).
 Готовий APK: `mobile_app\build\flutter\build\app\outputs\flutter-apk\app-release.apk`.
 Package name на телефоні: `com.shramix.pc_control_remote` (НЕ `pc_control` — flet додає суфікс).

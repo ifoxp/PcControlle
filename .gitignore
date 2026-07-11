@@ -3,6 +3,8 @@
 
 # Стан застосунку (генерується під час роботи)
 *.log
+# логи збірки (напр. mobile_app/_build_apk.log)
+_*.log
 sorter_log.txt
 sorter_checked.json
 sorter_trashed.json
@@ -10,6 +12,8 @@ sorter_synced.json
 sorter_state.json
 volume_offsets.json
 screenshots/
+# нативні крах-дампи біля exe
+crash_native/
 
 # Python
 __pycache__/
@@ -17,6 +21,8 @@ __pycache__/
 .venv/
 build/
 dist/
+# готові дистрибутиви (ZIP/APK) — артефакти збірки
+release/
 
 # IDE
 .idea/

@@ -161,7 +161,12 @@
       "WebFetch(domain:docs.flet.dev)",
       "WebFetch(domain:flet.dev)",
       "WebFetch(domain:github.com)",
-      "Bash(ls .venv/Scripts/python.exe)"
+      "Bash(ls .venv/Scripts/python.exe)",
+      "Bash(Get-ChildItem -Path \"E:\\\\Programing\\\\Phyton\\\\offPC\" -Force)",
+      "Bash(Select-Object Name, PSIsContainer)",
+      "Bash(Format-Table -AutoSize)",
+      "Bash(ls -la \"E:\\\\Programing\\\\Phyton\\\\offPC\\\\\" | head -50)",
+      "Read(//e/Programing/Phyton/**)"
     ]
   }
 }

@@ -190,22 +190,11 @@ COMMANDS: list[dict] = [
 
     # --- ЗАГОТОВКИ під майбутнє (телефон уже вміє ці віджети) ---
     # Розкоментуй/додай ендпоінт на ПК — і кнопка з'явиться на телефоні сама.
-    # {
-    #     "id": "brightness", "title": "Яскравість", "icon": "brightness_6",
-    #     "widget": "slider", "method": "GET", "path": "/brightness",
-    #     "response": "text", "group": "Екран",
-    #     "params": {"name": "level", "min": 0, "max": 100, "step": 5,
-    #                "getter": {"path": "/brightness_get", "response": "number"}},
-    # },
+    # (brightness уже реалізована вище як активна команда.)
     # {
     #     "id": "record_audio", "title": "Записати звук", "icon": "mic",
     #     "widget": "audio", "method": "GET", "path": "/record_audio",
     #     "response": "audio", "group": "Медіа",
-    # },
-    # {
-    #     "id": "media_play", "title": "Play/Pause", "icon": "play_arrow",
-    #     "widget": "toggle", "method": "GET", "path": "/media_toggle",
-    #     "response": "text", "group": "Медіа",
     # },
 ]
 
