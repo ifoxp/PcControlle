@@ -57,8 +57,11 @@ def main(page: "ft.Page"):
     page._on_pop_cbs = {}   # id(view) -> callback при знятті
 
     def push_screen(content, title="", on_pop=None):
-        """Додає повноекранний View. Системний «назад» його зніме."""
+        """Додає повноекранний View. Системний «назад» його зніме.
+        can_pop=False — щоб Flet НЕ знімав view сам (інакше подвійне зняття з нашим
+        pop_screen → порожній корінь). Усе зняття робимо вручну в _on_confirm_pop."""
         v = ft.View(controls=[content], padding=0, bgcolor="#0f1116",
+                    can_pop=False, on_confirm_pop=lambda e: pop_screen(),
                     appbar=ft.AppBar(
                         title=ft.Text(title, size=16, color="#e8e8ea"),
                         bgcolor="#171a21",
@@ -72,6 +75,14 @@ def main(page: "ft.Page"):
         return v
 
     def pop_screen():
+        # дебаунс: on_confirm_pop і on_view_pop можуть прийти на одну й ту саму дію
+        # «назад» — без захисту знімемо ДВА view (перескочимо екран). Ігноруємо
+        # повторний виклик у межах ~400мс.
+        import time as _t
+        now = _t.monotonic()
+        if now - getattr(page, "_last_pop_t", 0.0) < 0.4:
+            return True
+        page._last_pop_t = now
         if len(page.views) > 1:
             v = page.views.pop()
             cb = page._on_pop_cbs.pop(id(v), None)
@@ -91,13 +102,24 @@ def main(page: "ft.Page"):
                     pass
             page.update()
             return True
-        return False
+        # Ми вже на КОРЕНІ (немає повноекранних view). «Назад» НЕ закриває застосунок,
+        # а завжди веде на таб «Команди» (з будь-якого табу/місця). Якщо вже на
+        # Командах — просто лишаємось (нічого не робимо, застосунок НЕ закривається).
+        shell = getattr(page, "_main_shell", None)
+        if shell is not None:
+            try:
+                shell.go_commands()
+            except Exception:
+                pass
+        return True  # завжди «поглинаємо» back — застосунок не закриється
 
     page._push_screen = push_screen
     page._pop_screen = pop_screen
 
     def _on_view_pop(e):
-        # системний «назад» / кнопка AppBar
+        # Резервний обробник (деякі версії Flet шлють on_view_pop для не-кореневих
+        # view навіть при can_pop=False). Основна логіка — в on_confirm_pop кожного
+        # view; тут просто делегуємо в ту саму єдину точку.
         pop_screen()
 
     def _on_keyboard(e):
@@ -149,6 +171,22 @@ def main(page: "ft.Page"):
         _error_view(page, "Імпорт екранів", traceback.format_exc())
         return
 
+    def _root_confirm_pop(e):
+        # Системний «назад» на КОРЕНЕВОМУ екрані (коли view один — on_view_pop не
+        # спрацьовує, тому ловимо через can_pop=False + on_confirm_pop). Замість
+        # закриття застосунку — переходимо на таб «Команди». confirm_pop(False) =
+        # НЕ знімати кореневий view (застосунок лишається відкритим).
+        shell = getattr(page, "_main_shell", None)
+        if shell is not None:
+            try:
+                shell.go_commands()
+            except Exception:
+                pass
+        try:
+            e.view.confirm_pop(False)
+        except Exception:
+            pass
+
     def show(control, with_nav=False):
         # Основний екран = КОРЕНЕВИЙ view (page.views[0]). Скидаємо стек views
         # (закриваємо всі повноекранні) і ставимо новий корінь. Навігація (таби) —
@@ -156,8 +194,11 @@ def main(page: "ft.Page"):
         try:
             nav = getattr(control, "_nav_bar", None) if with_nav else None
             page._on_pop_cbs.clear()
+            # can_pop=False + on_confirm_pop: перехоплюємо системний back навіть
+            # коли view ЄДИНИЙ (інакше Android закрив би застосунок).
             root = ft.View(controls=[control], padding=0, bgcolor="#0f1116",
-                           navigation_bar=nav)
+                           navigation_bar=nav, can_pop=False,
+                           on_confirm_pop=_root_confirm_pop)
             page.views.clear()
             page.views.append(root)
             page.update()
@@ -178,6 +219,7 @@ def main(page: "ft.Page"):
                 go_pair()
             else:
                 shell = _MainShell(page, storage, on_add_pc=go_pair, on_manage_pcs=go_pcs)
+                page._main_shell = shell      # для обробника «назад» (перехід на Команди)
                 show(shell, with_nav=True)   # MainShell ставить page.navigation_bar
         except Exception:
             _error_view(page, "Головний екран", traceback.format_exc())
@@ -236,10 +278,33 @@ class _MainShell(ft.Container):
             ],
         )
 
+    def go_commands(self) -> bool:
+        """Перемкнути на таб «Команди». Повертає True, якщо щось змінилось
+        (тобто ми були НЕ на Командах) — використовує обробник «назад»."""
+        changed = getattr(self._nav_bar, "selected_index", 0) != 0
+        self._nav_bar.selected_index = 0
+        self._body.content = self.grid
+        try:
+            self.grid.refresh_now()
+        except Exception:
+            pass
+        try:
+            self._body.update()
+        except Exception:
+            pass
+        self._pg.update()
+        return changed
+
     def _on_nav(self, e):
         idx = e.control.selected_index
         if idx == 0:
             self._body.content = self.grid
+            # свіжо перемалювати сітку САМЕ зараз (коли grid стає видимим) —
+            # інакше зміни видимості з таба «Вигляд» давали порожньо/дублі
+            try:
+                self.grid.refresh_now()
+            except Exception:
+                pass
         elif idx == 1:
             # перебудувати налаштування (щоб список іконок був свіжий)
             try:

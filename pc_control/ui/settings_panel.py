@@ -133,6 +133,104 @@ class _Group(QFrame):
         self.body.addWidget(w)
 
 
+class _ToggleSwitch(QWidget):
+    """iOS-подібний перемикач: підпис ліворуч + доріжка з кружком, що їздить.
+    Сигнал toggled(bool) при кліку користувача (програмна зміна — set_checked —
+    сигнал НЕ емітить, щоб не зациклювати з оновленням статусу)."""
+
+    def __init__(self, label: str, parent=None):
+        super().__init__(parent)
+        self._checked = False
+        self._enabled_ux = True
+        self._pos = 0.0  # 0..1 позиція кружка (для плавності)
+        self._label = label
+        self._cbs = []
+        self.setMinimumHeight(34)
+        self.setCursor(Qt.PointingHandCursor)
+        from PySide6.QtCore import QPropertyAnimation
+        self._anim = QPropertyAnimation(self, b"knob")
+        self._anim.setDuration(140)
+
+    # --- Qt property для анімації кружка ---
+    def _get_knob(self):
+        return self._pos
+
+    def _set_knob(self, v):
+        self._pos = v
+        self.update()
+
+    from PySide6.QtCore import Property as _QtProperty
+    knob = _QtProperty(float, _get_knob, _set_knob)
+
+    def connect(self, cb):
+        self._cbs.append(cb)
+
+    def is_checked(self) -> bool:
+        return self._checked
+
+    def set_checked(self, on: bool):
+        """Програмна зміна — без сигналу."""
+        self._checked = bool(on)
+        self._animate_to(1.0 if on else 0.0)
+
+    def set_ux_enabled(self, on: bool):
+        self._enabled_ux = bool(on)
+        self.setCursor(Qt.PointingHandCursor if on else Qt.ForbiddenCursor)
+        self.update()
+
+    def _animate_to(self, target: float):
+        self._anim.stop()
+        self._anim.setStartValue(self._pos)
+        self._anim.setEndValue(target)
+        self._anim.start()
+
+    def mousePressEvent(self, e):
+        if not self._enabled_ux:
+            return
+        self._checked = not self._checked
+        self._animate_to(1.0 if self._checked else 0.0)
+        for cb in self._cbs:
+            cb(self._checked)
+
+    def paintEvent(self, e):
+        from PySide6.QtGui import QPainter, QColor, QFont
+        from PySide6.QtCore import QRectF
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        h = self.height()
+        # трек праворуч
+        track_w, track_h = 46, 26
+        track_x = self.width() - track_w
+        track_y = (h - track_h) / 2
+        dim = not self._enabled_ux
+        on_col = QColor("#334155") if dim else QColor(theme.ACCENT)
+        off_col = QColor("#1E293B") if dim else QColor("#334155")
+        # інтерполяція кольору треку за позицією
+        t = self._pos
+        col = QColor(
+            int(off_col.red() + (on_col.red() - off_col.red()) * t),
+            int(off_col.green() + (on_col.green() - off_col.green()) * t),
+            int(off_col.blue() + (on_col.blue() - off_col.blue()) * t),
+        )
+        p.setPen(Qt.NoPen)
+        p.setBrush(col)
+        p.drawRoundedRect(QRectF(track_x, track_y, track_w, track_h),
+                          track_h / 2, track_h / 2)
+        # кружок
+        knob_d = track_h - 6
+        knob_x = track_x + 3 + (track_w - knob_d - 6) * self._pos
+        knob_y = track_y + 3
+        p.setBrush(QColor("#94A3B8") if dim else QColor("#F8FAFC"))
+        p.drawEllipse(QRectF(knob_x, knob_y, knob_d, knob_d))
+        # підпис ліворуч
+        p.setPen(QColor("#64748B") if dim else QColor(theme.FG))
+        f = QFont(); f.setPointSize(10)
+        p.setFont(f)
+        p.drawText(QRectF(0, 0, track_x - 10, h),
+                   int(Qt.AlignVCenter | Qt.AlignLeft), self._label)
+        p.end()
+
+
 class _VolumeRow(QFrame):
     """Рядок одного застосунку з кастомною гучністю: ім'я, offset, кнопка скиду."""
 
@@ -326,33 +424,33 @@ class SettingsPanel(QWidget):
         g_icon.add(self.btn_demo)
         root.addWidget(g_icon)
 
-        # --- Автозапуск з правами ---
-        g_auto = _Group("Автозапуск з правами адміністратора")
+        # --- Права адміна + автозапуск ---
+        g_auto = _Group("Права адміністратора та автозапуск")
         from ..core import autostart
         auto_desc = QLabel(
-            "Запуск PC Control при вході в Windows із правами адміністратора — "
-            "БЕЗ вікна UAC щоразу (через Планувальник задач). Дає температуру CPU, "
-            "закриття захищених процесів, надійніші дії живлення.\n"
-            "UAC з'явиться рівно один раз — під час увімкнення."
+            "Права адміністратора потрібні для температури CPU в моніторингу, "
+            "закриття захищених процесів і надійних дій живлення. Увімкнення "
+            "перезапустить програму з правами (UAC один раз).\n"
+            "Автозапуск (старт при вході в Windows) доступний лише коли ввімкнено "
+            "права адміна."
         )
         auto_desc.setObjectName("fieldHint")
         auto_desc.setWordWrap(True)
         g_auto.add(auto_desc)
+
+        # перемикач 1 (головний): права адміністратора
+        self.sw_admin = _ToggleSwitch("Права адміністратора")
+        self.sw_admin.connect(self._on_admin_toggled)
+        g_auto.add(self.sw_admin)
+
+        # перемикач 2 (залежний): автозапуск — активний лише при адмін-правах
+        self.sw_autostart = _ToggleSwitch("Автозапуск при вході в Windows")
+        self.sw_autostart.connect(self._on_autostart_toggled)
+        g_auto.add(self.sw_autostart)
+
         self._auto_status = QLabel("")
         self._auto_status.setObjectName("fieldHint")
         self._auto_status.setWordWrap(True)
-        auto_row = QHBoxLayout()
-        self.btn_auto_on = QPushButton("Увімкнути автозапуск")
-        self.btn_auto_on.setObjectName("primary")
-        self.btn_auto_on.clicked.connect(lambda: self._toggle_autostart(True))
-        self.btn_auto_off = QPushButton("Вимкнути")
-        self.btn_auto_off.setObjectName("ghost")
-        self.btn_auto_off.clicked.connect(lambda: self._toggle_autostart(False))
-        auto_row.addWidget(self.btn_auto_on)
-        auto_row.addWidget(self.btn_auto_off)
-        auto_row.addStretch(1)
-        auto_wrap = QWidget(); auto_wrap.setLayout(auto_row)
-        g_auto.add(auto_wrap)
         g_auto.add(self._auto_status)
         self._refresh_autostart_status()
         root.addWidget(g_auto)
@@ -377,30 +475,74 @@ class SettingsPanel(QWidget):
             QTimer.singleShot(14000, lambda: self.btn_demo.setText("▶   Показати всі анімації"))
 
     def _refresh_autostart_status(self):
+        """Синхронізує перемикачі з фактичним станом (без емісії сигналів)."""
         from ..core import autostart
-        enabled = autostart.is_enabled()
         admin = autostart.is_admin()
-        parts = []
-        parts.append("✓ Автозапуск увімкнено" if enabled else "○ Автозапуск вимкнено")
-        parts.append("права адміна активні" if admin else "зараз без прав адміна")
-        self._auto_status.setText(" · ".join(parts))
+        autorun = autostart.is_enabled()
+        self.sw_admin.set_checked(admin)
+        self.sw_autostart.set_checked(autorun)
+        # автозапуск можна чіпати лише коли є права адміна (задача — highest)
+        self.sw_autostart.set_ux_enabled(admin)
+        if not admin:
+            self._auto_status.setText(
+                "○ Без прав адміна · температура CPU недоступна. "
+                "Увімкни права, щоб керувати автозапуском.")
+        elif autorun:
+            self._auto_status.setText("✓ Права адміна активні · автозапуск увімкнено")
+        else:
+            self._auto_status.setText("✓ Права адміна активні · автозапуск вимкнено")
 
-    def _toggle_autostart(self, on: bool):
+    def _on_admin_toggled(self, on: bool):
         from ..core import autostart
         if on:
-            ok, msg = autostart.enable_elevated()
-            if ok and not autostart.is_admin():
-                # задачу створено, але ПОТОЧНИЙ процес без прав — вони зʼявляться
-                # при наступному вході в Windows (Планувальник запустить з правами)
-                msg = ("✓ Автозапуск налаштовано. Права адміністратора застосуються "
-                       "при наступному вході в Windows (перезавантаж ПК або вийди/"
-                       "увійди). Тоді запрацює температура CPU й закриття захищених "
-                       "процесів.")
+            if autostart.is_admin():
+                self._auto_status.setText("Права адміна вже активні")
+                self._refresh_autostart_status()
+                return
+            self._auto_status.setText("Перезапуск з правами адміністратора… (підтвердь UAC)")
+            if autostart.relaunch_as_admin():
+                # підвищений процес стартував — завершуємо поточний (без прав)
+                from PySide6.QtWidgets import QApplication
+                QTimer.singleShot(300, QApplication.instance().quit)
+            else:
+                self._auto_status.setText("UAC відхилено — права не отримано")
+                self._refresh_autostart_status()
         else:
-            ok, msg = autostart.disable()
+            # «вимкнути права» = прибрати автозапуск + перезапуститись без прав
+            if autostart.is_admin():
+                autostart.disable_autostart()
+            self._auto_status.setText("Перезапуск без прав адміністратора…")
+            self._relaunch_normal()
+
+    def _on_autostart_toggled(self, on: bool):
+        from ..core import autostart
+        if not autostart.is_admin():
+            # захист: без прав не можна (перемикач і так заблокований)
+            self._auto_status.setText("Спершу увімкни права адміністратора")
+            self._refresh_autostart_status()
+            return
+        if on:
+            ok, msg = autostart.enable_autostart()
+        else:
+            ok, msg = autostart.disable_autostart()
         self._auto_status.setText(msg)
-        # статус задачі оновиться після підтвердження UAC — перечитаємо трохи згодом
-        QTimer.singleShot(3000, self._refresh_autostart_status)
+        self._refresh_autostart_status()
+
+    def _relaunch_normal(self):
+        """Перезапускає програму БЕЗ прав адміна (через explorer, щоб скинути
+        підвищення) і завершує поточний процес."""
+        import sys
+        import subprocess
+        from PySide6.QtWidgets import QApplication
+        try:
+            if getattr(sys, "frozen", False):
+                # explorer.exe запускає ціль зі стандартними (не підвищеними) правами
+                subprocess.Popen(["explorer.exe", sys.executable])
+            else:
+                subprocess.Popen([sys.executable, "main.py"])
+        except Exception:
+            pass
+        QTimer.singleShot(300, QApplication.instance().quit)
 
     def refresh_dynamic(self):
         """Оновити динамічні частини (список гучності) — викликати при показі панелі."""

@@ -28,8 +28,12 @@ adaptive_icon_background = "#0f1116"
 scheme = "pccontrol"
 host = "pair"
 
-# Дозволи Android: зберігати медіа в Downloads, доступ до сховища.
+# Дозволи Android: зберігати медіа в Downloads, доступ до сховища, вибір файлів
+# (READ_MEDIA_* — для FilePicker на Android 13+, де READ_EXTERNAL_STORAGE вже не діє).
 [tool.flet.android.permission]
 "android.permission.INTERNET" = true
 "android.permission.WRITE_EXTERNAL_STORAGE" = true
 "android.permission.READ_EXTERNAL_STORAGE" = true
+"android.permission.READ_MEDIA_IMAGES" = true
+"android.permission.READ_MEDIA_VIDEO" = true
+"android.permission.READ_MEDIA_AUDIO" = true

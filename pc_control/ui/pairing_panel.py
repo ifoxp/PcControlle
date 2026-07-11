@@ -102,18 +102,24 @@ def _qr_pixmap(text: str, size: int = 220) -> QPixmap:
 
 
 class _DeviceRow(QFrame):
-    """Один рядок списку пристроїв: назва + деталі + «Відкликати»."""
+    """Один рядок списку пристроїв: назва + деталі + «Відкликати».
+    У режимі редагування видимості (R+P) додається кнопка «Сховати»/«Показати»."""
 
-    def __init__(self, device: dict, on_revoke, parent=None):
+    def __init__(self, device: dict, on_revoke, *, edit_visibility=False,
+                 on_toggle_hidden=None, parent=None):
         super().__init__(parent)
         self.setObjectName("card")
         lay = QHBoxLayout(self)
         lay.setContentsMargins(14, 10, 14, 10)
         lay.setSpacing(10)
 
+        hidden = bool(device.get("hidden"))
         info = QVBoxLayout()
         info.setSpacing(2)
-        name = QLabel(device.get("name", "Пристрій"))
+        name_text = device.get("name", "Пристрій")
+        if hidden:
+            name_text += "  (схований)"
+        name = QLabel(name_text)
         name.setObjectName("cardTitle")
         meta = QLabel(
             f"IP {device.get('last_ip', '?')} · активний {device.get('last_seen', '?')}"
@@ -122,6 +128,13 @@ class _DeviceRow(QFrame):
         info.addWidget(name)
         info.addWidget(meta)
         lay.addLayout(info, 1)
+
+        # у режимі редагування — кнопка сховати/показати
+        if edit_visibility and on_toggle_hidden is not None:
+            vis_btn = QPushButton("Показати" if hidden else "Сховати")
+            vis_btn.clicked.connect(
+                lambda: on_toggle_hidden(device.get("id", ""), not hidden))
+            lay.addWidget(vis_btn, 0, Qt.AlignVCenter)
 
         btn = QPushButton("Відкликати")
         btn.setObjectName("danger")
@@ -135,7 +148,28 @@ class PairingPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("root")
+        # режим редагування видимості (перемикається R+P): показує ВСІ пристрої
+        # (зокрема сховані) + кнопки «Сховати»/«Показати». Поза режимом — сховані
+        # пристрої не видно у списку.
+        self._edit_visibility = False
+        self._keys_down = set()
+        self.setFocusPolicy(Qt.StrongFocus)
         self._build()
+
+    # R+P — перемикач режиму редагування видимості пристроїв
+    def keyPressEvent(self, e):
+        from PySide6.QtCore import Qt as _Qt
+        self._keys_down.add(e.key())
+        if _Qt.Key_R in self._keys_down and _Qt.Key_P in self._keys_down:
+            self._edit_visibility = not self._edit_visibility
+            self._keys_down.clear()
+            self.refresh()
+            return
+        super().keyPressEvent(e)
+
+    def keyReleaseEvent(self, e):
+        self._keys_down.discard(e.key())
+        super().keyReleaseEvent(e)
 
     def _build(self) -> None:
         self._root = QVBoxLayout(self)
@@ -219,7 +253,10 @@ class PairingPanel(QWidget):
 
         # --- список пристроїв ---
         header = QHBoxLayout()
-        lbl = QLabel("Паровані пристрої")
+        title_txt = "Паровані пристрої"
+        if self._edit_visibility:
+            title_txt += ":"
+        lbl = QLabel(title_txt)
         lbl.setObjectName("sectionTitle")
         header.addWidget(lbl)
         header.addStretch(1)
@@ -228,14 +265,32 @@ class PairingPanel(QWidget):
         header.addWidget(refresh_btn)
         self._root.addLayout(header)
 
+        # підказка про R+P
+        hint = QLabel(
+            "Режим редагування видимості: показано СХОВАНІ пристрої, у кожного — «Сховати/Показати». "
+            "Натисни R+P, щоб вийти."
+            if self._edit_visibility else
+            ""
+        )
+        hint.setObjectName("appSubtitle")
+        hint.setWordWrap(True)
+        self._root.addWidget(hint)
+
         device_list = devices.list_devices()
+        # поза режимом редагування — сховані пристрої НЕ показуємо
+        if not self._edit_visibility:
+            device_list = [d for d in device_list if not d.get("hidden")]
+
         if not device_list:
             empty = QLabel("Ще жоден пристрій не підключено.")
             empty.setObjectName("appSubtitle")
             self._root.addWidget(empty)
         else:
             for d in device_list:
-                self._root.addWidget(_DeviceRow(d, self._on_revoke))
+                self._root.addWidget(_DeviceRow(
+                    d, self._on_revoke,
+                    edit_visibility=self._edit_visibility,
+                    on_toggle_hidden=self._on_toggle_hidden))
 
         self._root.addStretch(1)
 
@@ -246,6 +301,12 @@ class PairingPanel(QWidget):
         btn.setText("✅ Скопійовано")
         from PySide6.QtCore import QTimer
         QTimer.singleShot(1500, lambda: btn.setText("📋 Копіювати код"))
+
+    def _on_toggle_hidden(self, device_id: str, hidden: bool) -> None:
+        if device_id and devices.set_device_hidden(device_id, hidden):
+            logger.info("Пристрій %s %s", device_id,
+                        "сховано" if hidden else "показано")
+        self.refresh()
 
     def _on_revoke(self, device_id: str) -> None:
         if device_id and devices.revoke(device_id):

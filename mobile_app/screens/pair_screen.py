@@ -142,7 +142,10 @@ class PairScreen(ft.Container):
                 result = api_client.pair(host, int(port), tls, pin, name, fp)
                 token = result["token"]
                 real_fp = result.get("fingerprint", fp) or fp
-                pc = self.storage.add_pc(name=name, host=host, port=int(port),
+                # назву ПК беремо з відповіді сервера (hostname Windows), а не з поля
+                # телефона — щоб у списку ПК був саме комп'ютер (напр. DESKTOP-ABC).
+                pc_name = (result.get("server_name") or "").strip() or name
+                pc = self.storage.add_pc(name=pc_name, host=host, port=int(port),
                                          tls=tls, token=token, fingerprint=real_fp)
                 self._set_status("Підключено!", theme.OK)
                 self.on_paired(pc)

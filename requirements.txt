@@ -17,3 +17,4 @@ qrcode[pil]       # QR-код парування на дашборді
 pillow            # ImageGrab (потокобезпечний скріншот) + QR-рендер
 screen_brightness_control  # яскравість моніторів (DDC/CI)
 wmi
+pythonnet         # доступ до LibreHardwareMonitorLib.dll (.NET) — температура CPU/GPU

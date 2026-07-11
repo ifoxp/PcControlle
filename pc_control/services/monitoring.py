@@ -82,6 +82,7 @@ class _Monitor:
             "gpu": _Agg(), "gpu_mem": _Agg(),
             "cpu_temp": _Agg(), "gpu_temp": _Agg(),
             "gpu_power": _Agg(), "cpu_power": _Agg(),
+            "total_power": _Agg(),   # приблизне сумарне споживання ПК (CPU+GPU)
         }
         self.cores_last = []        # % по ядрах (останній замір)
         self.active_window = ""
@@ -128,9 +129,22 @@ class _Monitor:
             self._lhm_tried = True
             try:
                 import clr  # pythonnet
+                import sys
+                from pathlib import Path
                 from ..core import paths
-                dll = paths.BASE_DIR / "LibreHardwareMonitorLib.dll"
-                if dll.exists():
+                # DLL можуть бути: у _MEIPASS (onefile .exe розпаковує datas туди),
+                # поруч з .exe (BASE_DIR), або у pc_control/lib (dev-запуск).
+                name = "LibreHardwareMonitorLib.dll"
+                candidates = []
+                meipass = getattr(sys, "_MEIPASS", None)
+                if meipass:
+                    candidates.append(Path(meipass) / name)
+                candidates += [
+                    paths.BASE_DIR / name,
+                    Path(__file__).resolve().parents[1] / "lib" / name,
+                ]
+                dll = next((d for d in candidates if d.exists()), None)
+                if dll is not None:
                     clr.AddReference(str(dll))
                     from LibreHardwareMonitor.Hardware import Computer
                     c = Computer()
@@ -145,10 +159,10 @@ class _Monitor:
                 logger.info("LHM недоступний (%s) — температура CPU може бути відсутня.", e)
                 self._lhm = None
         if self._lhm is None:
-            return None, None
+            return {"cpu_t": None, "gpu_t": None, "cpu_power": None, "gpu_power": None}
         try:
             from LibreHardwareMonitor.Hardware import SensorType
-            res = {"cpu_t": None, "gpu_t": None, "cpu_power": None}
+            res = {"cpu_t": None, "gpu_t": None, "cpu_power": None, "gpu_power": None}
             for hw in self._lhm.Hardware:
                 hw.Update()
                 is_cpu = "Cpu" in str(hw.HardwareType)
@@ -163,12 +177,16 @@ class _Monitor:
                             res["cpu_t"] = round(float(s.Value), 1)
                         elif is_gpu and res["gpu_t"] is None:
                             res["gpu_t"] = round(float(s.Value), 1)
-                    elif s.SensorType == SensorType.Power and is_cpu:
-                        if "Package" in sn or res["cpu_power"] is None:
+                    elif s.SensorType == SensorType.Power:
+                        # CPU Package Power; GPU — беремо загальну плати ("Package"/"Total")
+                        if is_cpu and ("Package" in sn or res["cpu_power"] is None):
                             res["cpu_power"] = round(float(s.Value))
+                        elif is_gpu and ("Package" in sn or "Total" in sn
+                                         or res["gpu_power"] is None):
+                            res["gpu_power"] = round(float(s.Value))
             return res
         except Exception:
-            return {"cpu_t": None, "gpu_t": None, "cpu_power": None}
+            return {"cpu_t": None, "gpu_t": None, "cpu_power": None, "gpu_power": None}
 
     def _active_window_title(self):
         try:
@@ -188,6 +206,13 @@ class _Monitor:
         cpu_temp = lhm.get("cpu_t")
         cpu_power = lhm.get("cpu_power")
         gpu_temp = lhm.get("gpu_t") if lhm.get("gpu_t") is not None else g.get("temp")
+        # GPU-вати: nvidia-smi точніші; якщо нема (не-Nvidia) — беремо з LHM
+        gpu_power = g.get("power") if g.get("power") is not None else lhm.get("gpu_power")
+        # приблизне сумарне споживання ПК: CPU + GPU (головні споживачі; повне
+        # «з розетки» без спец. заліза не виміряти, це оцінка знизу).
+        total_power = None
+        if cpu_power is not None or gpu_power is not None:
+            total_power = round((cpu_power or 0) + (gpu_power or 0))
 
         with self._lock:
             self.metrics["cpu"].add(cpu)
@@ -202,8 +227,10 @@ class _Monitor:
                 self.metrics["cpu_power"].add(cpu_power)
             if gpu_temp is not None:
                 self.metrics["gpu_temp"].add(gpu_temp)
-            if g.get("power") is not None:
-                self.metrics["gpu_power"].add(g["power"])
+            if gpu_power is not None:
+                self.metrics["gpu_power"].add(gpu_power)
+            if total_power is not None:
+                self.metrics["total_power"].add(total_power)
             self.cores_last = [round(c, 1) for c in cores]
             self.active_window = self._active_window_title()
             # абсолютні значення (не агрегуємо — показуємо поточні)

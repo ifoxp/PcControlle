@@ -67,6 +67,11 @@ class ApiClient:
         self.pc = pc
         self.timeout = timeout
         self.retries = retries
+        # Persistent keep-alive клієнт для «гарячих» серій запитів (тачпад).
+        # Створюється на вимогу (open_session), тримає TLS-зʼєднання відкритим,
+        # тож рухи миші летять без нового рукостискання щоразу. Закривається
+        # у close_session (вихід із меню / таймаут неактивності).
+        self._session = None
 
     @property
     def base_url(self) -> str:
@@ -84,32 +89,57 @@ class ApiClient:
             h.update(extra)
         return h
 
-    def _client(self):
+    def _client(self, timeout: float | None = None):
         import httpx
+        to = timeout if timeout is not None else self.timeout
         if self.pc.get("tls", True):
             fp = (self.pc.get("fingerprint", "") or "").strip()
             if fp:
                 # self-signed сервер (прямий доступ) → pinning по fingerprint
                 transport = _make_pinned_transport(fp, self.retries)
-                return httpx.Client(transport=transport, timeout=self.timeout)
+                return httpx.Client(transport=transport, timeout=to)
             # порожній fingerprint → Cloudflare: довірений CA. retries задаємо через
             # транспорт (httpx.Client НЕ приймає retries напряму — це давало
             # "Client.__init__() got an unexpected keyword argument 'retries'").
             transport = httpx.HTTPTransport(retries=self.retries)
-            return httpx.Client(timeout=self.timeout, transport=transport, verify=True)
+            return httpx.Client(timeout=to, transport=transport, verify=True)
         transport = httpx.HTTPTransport(retries=self.retries)
-        return httpx.Client(timeout=self.timeout, transport=transport)
+        return httpx.Client(timeout=to, transport=transport)
+
+    def open_session(self) -> None:
+        """Відкриває persistent keep-alive зʼєднання (для тачпада тощо).
+        Наступні request() підуть по ньому без нового TLS-рукостискання.
+        Безпечно викликати повторно — якщо сесія вже є, нічого не робить."""
+        if self._session is None:
+            self._session = self._client()
+
+    def close_session(self) -> None:
+        """Закриває persistent зʼєднання. Безпечно навіть якщо його нема."""
+        s, self._session = self._session, None
+        if s is not None:
+            try:
+                s.close()
+            except Exception:
+                pass
 
     def request(self, method: str, path: str, *, params: dict | None = None):
         import httpx
         url = self.base_url + path
         try:
-            with self._client() as client:
-                resp = client.request(method.upper(), url, params=params,
-                                      headers=self._headers())
+            if self._session is not None:
+                # persistent-сесія: НЕ закриваємо після запиту (keep-alive)
+                resp = self._session.request(method.upper(), url, params=params,
+                                             headers=self._headers())
+            else:
+                with self._client() as client:
+                    resp = client.request(method.upper(), url, params=params,
+                                          headers=self._headers())
         except PinMismatch:
             raise
         except httpx.HTTPError as e:
+            # Persistent-сокет міг померти (сервер закрив keep-alive) — скидаємо
+            # сесію, щоб наступний виклик підняв свіже зʼєднання.
+            self.close_session()
             raise ApiError(f"Мережева помилка: {e}") from e
         if resp.status_code == 403:
             raise ApiError("Доступ заборонено (токен недійсний або IP забанено).")
@@ -127,6 +157,78 @@ class ApiClient:
 
     def get_bytes(self, path: str, params: dict | None = None) -> bytes:
         return self.request("GET", path, params=params).content
+
+    # -------------------------------------------------- POST / файли
+    def _body_request(self, path: str, *, params=None, json=None,
+                      content=None, files=None, data=None, content_type=None):
+        """POST із тілом (json / сирі байти / multipart). Не через persistent-сесію
+        (файли можуть бути великі — окремий клієнт із запасом по таймауту)."""
+        import httpx
+        url = self.base_url + path
+        headers = self._headers()
+        if content_type and content is not None:
+            headers["Content-Type"] = content_type
+        try:
+            with self._client(timeout=120.0) as client:
+                resp = client.post(url, params=params, json=json,
+                                   content=content, files=files, data=data,
+                                   headers=headers)
+        except PinMismatch:
+            raise
+        except httpx.HTTPError as e:
+            raise ApiError(f"Мережева помилка: {e}") from e
+        if resp.status_code == 403:
+            raise ApiError("Доступ заборонено (токен недійсний або IP забанено).")
+        if resp.status_code == 429:
+            raise ApiError("Забагато запитів, спробуй за мить.")
+        if resp.status_code >= 400:
+            raise ApiError(f"Помилка сервера {resp.status_code}: {resp.text[:120]}")
+        return resp
+
+    def post_json(self, path: str, json: dict | None = None,
+                  params: dict | None = None) -> dict:
+        r = self._body_request(path, params=params, json=json or {})
+        try:
+            return r.json()
+        except Exception:
+            return {"text": r.text}
+
+    def post_multipart(self, path: str, files: dict, data: dict | None = None) -> str:
+        """files={"file": (name, bytes, mime)} — відправка файлу на ПК."""
+        return self._body_request(path, files=files, data=data).text
+
+    def post_bytes(self, path: str, content: bytes, *, content_type: str,
+                   params: dict | None = None) -> str:
+        return self._body_request(path, content=content,
+                                  content_type=content_type, params=params).text
+
+    def download_to(self, path: str, dest_path: str, params: dict | None = None,
+                    on_progress=None) -> str:
+        """Стрімить файл із ПК у dest_path (не тримає в RAM). Повертає dest_path."""
+        import httpx
+        url = self.base_url + path
+        try:
+            with self._client(timeout=300.0) as client:
+                with client.stream("GET", url, params=params,
+                                   headers=self._headers()) as resp:
+                    if resp.status_code >= 400:
+                        raise ApiError(f"Помилка {resp.status_code}")
+                    total = int(resp.headers.get("Content-Length", 0) or 0)
+                    done = 0
+                    with open(dest_path, "wb") as f:
+                        for chunk in resp.iter_bytes(65536):
+                            f.write(chunk)
+                            done += len(chunk)
+                            if on_progress and total:
+                                try:
+                                    on_progress(done, total)
+                                except Exception:
+                                    pass
+        except PinMismatch:
+            raise
+        except httpx.HTTPError as e:
+            raise ApiError(f"Мережева помилка: {e}") from e
+        return dest_path
 
     def manifest(self) -> dict:
         return self.get_json("/manifest")

@@ -21,6 +21,8 @@ from widgets.slider import build_slider_tile
 from widgets.simple import (
     build_audio_tile,
     build_button_tile,
+    build_form_tile,
+    build_long_text_tile,
     build_picker_tile,
     build_push_clipboard_tile,
     build_text_input_tile,
@@ -32,9 +34,13 @@ from widgets.advanced import (
     build_process_list_tile,
 )
 from widgets.tools import (
+    build_log_view_tile,
     build_monitor_tile,
     build_stream_tile,
     build_touchpad_tile,
+)
+from widgets.files import (
+    build_file_browser_tile,
 )
 
 _BUILDERS = {
@@ -52,6 +58,11 @@ _BUILDERS = {
     "touchpad": build_touchpad_tile,
     "monitor": build_monitor_tile,
     "screen_stream": build_stream_tile,
+    # бібліотека можливостей
+    "file_browser": build_file_browser_tile,
+    "form": build_form_tile,
+    "long_text": build_long_text_tile,
+    "log_view": build_log_view_tile,
 }
 
 

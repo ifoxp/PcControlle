@@ -31,7 +31,6 @@ import threading
 import webbrowser
 
 from flask import Flask, abort, jsonify, request, send_file
-from pynput.keyboard import Controller as KeyboardController, Key
 from pynput.mouse import Controller as MouseController, Button
 
 from . import commands
@@ -49,24 +48,100 @@ from ..core.status import REGISTRY, SVC_API, State
 from ..services import sorter
 
 logger = get_logger("api")
-keyboard = KeyboardController()
 mouse = MouseController()
 
-# Гарячі клавіші. Формат: (список модифікаторів, клавіша).
-# Key.cmd — це клавіша Windows (Win/Super).
+# Гарячі клавіші. Формат: (список VK-модифікаторів, VK-клавіша).
+# Раніше було через pynput (keybd_event без scan-кодів) — Windows ІГНОРУВАВ
+# клавішу Win (Key.cmd) як модифікатор, тож Win+Shift+S друкувало просто "s".
+# Тепер шлемо нативним SendInput зі scan-кодами (див. _send_hotkey) → усі
+# комбінації, зокрема з Win, реєструються як справжнє апаратне натискання.
+# VK-коди: https://learn.microsoft.com/windows/win32/inputdev/virtual-key-codes
+VK_LWIN = 0x5B
+VK_CONTROL = 0x11
+VK_MENU = 0x12   # Alt
+VK_SHIFT = 0x10
 HOTKEYS = {
-    "alt_tab": ([Key.alt], Key.tab),
-    "alt_f4": ([Key.alt], Key.f4),
-    "task_manager": ([Key.ctrl, Key.shift], Key.esc),
-    # --- нові корисні (не перетинаються з наявними) ---
-    "snip": ([Key.cmd, Key.shift], "s"),       # Win+Shift+S — ножиці (скріншот області)
-    "new_desktop": ([Key.cmd, Key.ctrl], "d"), # Win+Ctrl+D — новий віртуальний стіл
-    "close_desktop": ([Key.cmd, Key.ctrl], Key.f4),  # Win+Ctrl+F4 — закрити вірт. стіл
-    "switch_desktop_right": ([Key.cmd, Key.ctrl], Key.right),  # наступний вірт. стіл
-    "switch_desktop_left": ([Key.cmd, Key.ctrl], Key.left),    # попередній вірт. стіл
-    "emoji": ([Key.cmd], "."),                 # Win+. — панель емодзі
-    "minimize_all": ([Key.cmd], "m"),          # Win+M — згорнути всі вікна
+    "alt_tab": ([VK_MENU], 0x09),                      # Alt+Tab
+    "alt_f4": ([VK_MENU], 0x73),                       # Alt+F4
+    "task_manager": ([VK_CONTROL, VK_SHIFT], 0x1B),    # Ctrl+Shift+Esc
+    # --- комбінації з Win ---
+    "snip": ([VK_LWIN, VK_SHIFT], 0x53),               # Win+Shift+S — ножиці
+    "new_desktop": ([VK_LWIN, VK_CONTROL], 0x44),      # Win+Ctrl+D — новий вірт. стіл
+    "close_desktop": ([VK_LWIN, VK_CONTROL], 0x73),    # Win+Ctrl+F4 — закрити вірт. стіл
+    "switch_desktop_right": ([VK_LWIN, VK_CONTROL], 0x27),  # Win+Ctrl+→
+    "switch_desktop_left": ([VK_LWIN, VK_CONTROL], 0x25),   # Win+Ctrl+←
+    "emoji": ([VK_LWIN], 0xBE),                        # Win+. — панель емодзі
+    "minimize_all": ([VK_LWIN], 0x4D),                 # Win+M — згорнути всі вікна
 }
+
+# Клавіші, для яких у SendInput ОБОВʼЯЗКОВИЙ прапорець extended-key (KEYEVENTF_EXTENDEDKEY):
+# стрілки, Win, деякі навігаційні. Інакше стрілки не працюють як стрілки.
+_EXTENDED_VK = {VK_LWIN, 0x25, 0x26, 0x27, 0x28, 0x2D, 0x2E, 0x21, 0x22, 0x23, 0x24}
+
+
+def _send_hotkey(modifiers: list[int], key: int) -> None:
+    """Натискає комбінацію нативним SendInput через VK-коди.
+
+    pynput (keybd_event без коректного scan) не тримав клавішу Win як модифікатор.
+    SendInput із заповненими І VK, І scan-кодом (MapVirtualKey) Windows приймає як
+    справжнє апаратне натискання — Win+Shift+S тощо працюють. Для Win/стрілок
+    додаємо extended-flag. Порядок: натиснути модифікатори → клавішу, відпустити
+    у зворотному порядку; між подіями коротка пауза, щоб ОС встигла зареєструвати
+    модифікатор перед клавішею.
+    """
+    import time as _t
+    KEYEVENTF_KEYUP = 0x0002
+    KEYEVENTF_EXTENDEDKEY = 0x0001
+    INPUT_KEYBOARD = 1
+    MAPVK_VK_TO_VSC = 0
+
+    ULONG_PTR = ctypes.c_size_t  # правильний розмір dwExtraInfo на 64-біт
+
+    class _KEYBDINPUT(ctypes.Structure):
+        _fields_ = [("wVk", ctypes.c_ushort), ("wScan", ctypes.c_ushort),
+                    ("dwFlags", ctypes.c_ulong), ("time", ctypes.c_ulong),
+                    ("dwExtraInfo", ULONG_PTR)]
+
+    class _MOUSEINPUT(ctypes.Structure):
+        _fields_ = [("dx", ctypes.c_long), ("dy", ctypes.c_long),
+                    ("mouseData", ctypes.c_ulong), ("dwFlags", ctypes.c_ulong),
+                    ("time", ctypes.c_ulong), ("dwExtraInfo", ULONG_PTR)]
+
+    class _INPUT(ctypes.Structure):
+        # union МУСИТЬ містити найбільший член (MOUSEINPUT), інакше sizeof(_INPUT)
+        # виходить 32 замість 40 на x64 → SendInput відкидає все (повертає 0).
+        class _U(ctypes.Union):
+            _fields_ = [("ki", _KEYBDINPUT), ("mi", _MOUSEINPUT)]
+        _anonymous_ = ("u",)
+        _fields_ = [("type", ctypes.c_ulong), ("u", _U)]
+
+    user32 = ctypes.windll.user32
+
+    def _send(vk: int, up: bool) -> None:
+        scan = user32.MapVirtualKeyW(vk, MAPVK_VK_TO_VSC)
+        flags = 0
+        if vk in _EXTENDED_VK:
+            flags |= KEYEVENTF_EXTENDEDKEY
+        if up:
+            flags |= KEYEVENTF_KEYUP
+        # wVk заповнений → Windows розпізнає клавішу за VK (надійно для Win/Alt/Ctrl),
+        # scan додаємо для повноти. НЕ ставимо KEYEVENTF_SCANCODE, щоб діяв wVk.
+        ki = _KEYBDINPUT(vk, scan, flags, 0, 0)
+        inp = _INPUT()
+        inp.type = INPUT_KEYBOARD
+        inp.ki = ki
+        user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(_INPUT))
+
+    for m in modifiers:
+        _send(m, False)
+        _t.sleep(0.02)
+    _send(key, False)
+    _t.sleep(0.03)
+    _send(key, True)
+    _t.sleep(0.01)
+    for m in reversed(modifiers):
+        _send(m, True)
+        _t.sleep(0.01)
 
 
 # --- Живлення: доступність дій та відкладений сон/гібернація ---
@@ -151,6 +226,93 @@ def _list_monitors() -> list[dict]:
         except Exception:
             pass
     return out
+
+
+def _known_folder(reg_name: str, fallback_sub: str) -> str:
+    """Реальний шлях відомої папки Windows. Папки (Downloads/Desktop/...) можуть
+    бути ПЕРЕНЕСЕНІ на інший диск — тоді os.path.join(home, ...) хибний. Реальний
+    шлях лежить у реєстрі User Shell Folders (з розкриттям %USERPROFILE%)."""
+    import os
+    try:
+        import winreg
+        key = r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as k:
+            val, _ = winreg.QueryValueEx(k, reg_name)
+            path = os.path.expandvars(val)
+            if path and os.path.isdir(path):
+                return path
+    except Exception:
+        pass
+    return os.path.join(os.path.expanduser("~"), fallback_sub)
+
+
+def _fs_roots() -> dict:
+    """Дозволені корені для файлових операцій (whitelist). Ключ → (людська назва, шлях).
+    Тільки ці теки доступні телефону — щоб не відкрити весь диск.
+    Шляхи беруться з реєстру (реальні), бо папки можуть бути на іншому диску."""
+    # ключі реєстру User Shell Folders (GUID/назви)
+    roots = {
+        "downloads": ("Завантаження",
+                      _known_folder("{374DE290-123F-4565-9164-39C4925E467B}", "Downloads")),
+        "desktop": ("Робочий стіл", _known_folder("Desktop", "Desktop")),
+        "documents": ("Документи", _known_folder("Personal", "Documents")),
+        "pictures": ("Зображення", _known_folder("My Pictures", "Pictures")),
+        "videos": ("Відео", _known_folder("My Video", "Videos")),
+    }
+    out = {k: (label, p) for k, (label, p) in roots.items() if _os_isdir(p)}
+    # Скріншоти сортувальника (CAMERA_DIR з конфіга), якщо задано й існує
+    try:
+        cam = str(getattr(CONFIG.sorter, "camera_dir", "") or "")
+        if cam and _os_isdir(cam):
+            out["screenshots"] = ("Скріншоти / Камера", cam)
+    except Exception:
+        pass
+    return out
+
+
+def _os_isdir(p: str) -> bool:
+    try:
+        import os
+        return os.path.isdir(p)
+    except Exception:
+        return False
+
+
+def _safe_path(root_key: str, rel: str):
+    """Абсолютний шлях у межах дозволеного кореня. None, якщо вихід за корінь
+    (захист від '..' / абсолютних шляхів). Повертає pathlib.Path."""
+    import os
+    from pathlib import Path
+    roots = _fs_roots()
+    if root_key not in roots:
+        return None
+    base = Path(roots[root_key][1]).resolve()
+    try:
+        target = (base / (rel or "")).resolve()
+    except Exception:
+        return None
+    # target МУСИТЬ бути всередині base
+    try:
+        target.relative_to(base)
+    except ValueError:
+        return None
+    return target
+
+
+def _hostname() -> str:
+    """Ім'я цього ПК (hostname Windows) — щоб телефон показував назву ПК, а не свою."""
+    try:
+        import socket
+        name = socket.gethostname().strip()
+        if name:
+            return name
+    except Exception:
+        pass
+    try:
+        import os
+        return os.environ.get("COMPUTERNAME", "") or "PC Control"
+    except Exception:
+        return "PC Control"
 
 
 def _open_clipboard_retry(u32, attempts: int = 10) -> bool:
@@ -340,7 +502,7 @@ function go(){{
         return jsonify({"monitors": _list_monitors()})
 
     @app.get("/screenshot")
-    @require_device
+    @require_device(high_rate=True)
     def take_screenshot():
         logger.info("Screenshot command received")
         now = datetime.datetime.now()
@@ -396,21 +558,11 @@ function go(){{
             return f"Unknown action. Available: {', '.join(HOTKEYS)}", 400
         modifiers, key = HOTKEYS[action]
         logger.info("Hotkey: %s", action)
-        import time as _t
-        # Мікро-затримки ОБОВʼЯЗКОВІ: без них Windows не встигає зареєструвати
-        # модифікатор (Win/Ctrl) перед клавішею, і комбінація Win+S друкувала просто
-        # "s". Пауза дає ОС побачити натиснутий модифікатор.
-        for mod in modifiers:
-            keyboard.press(mod)
-            _t.sleep(0.03)
-        _t.sleep(0.02)
-        keyboard.press(key)
-        _t.sleep(0.03)
-        keyboard.release(key)
-        _t.sleep(0.02)
-        for mod in reversed(modifiers):
-            keyboard.release(mod)
-            _t.sleep(0.02)
+        try:
+            _send_hotkey(modifiers, key)
+        except Exception as e:
+            logger.error("Hotkey %s error: %s", action, e)
+            return f"Error: {e}", 500
         return f"Pressed: {action}"
 
     @app.get("/volume")
@@ -573,7 +725,7 @@ function go(){{
             return f"Error: {e}", 500
 
     @app.get("/mouse")
-    @require_device
+    @require_device(high_rate=True)
     def mouse_ctl():
         """
         Віддалене керування мишею (тачпад з телефона).
@@ -611,7 +763,7 @@ function go(){{
             return f"Error: {e}", 500
 
     @app.get("/monitor/<cmd_>")
-    @require_device
+    @require_device(high_rate=True)
     def monitor_ctl(cmd_):
         """Моніторинг ресурсів на вимогу: start|data|reset|stop.
         Вимикається при stop — не жере ресурси, коли не потрібен."""
@@ -838,7 +990,7 @@ function go(){{
         fp = "" if CONFIG.api.tunnel_mode else tls.fingerprint()
         return jsonify({
             "token": token,
-            "server_name": "PC Control",
+            "server_name": _hostname(),
             "fingerprint": fp,
         })
 
@@ -862,7 +1014,158 @@ function go(){{
         except Exception:
             monitors = 2
         caps = {"power": _power_capabilities(), "monitors": monitors}
-        return jsonify(commands.build_manifest(caps))
+        m = commands.build_manifest(caps)
+        m["server_name"] = _hostname()  # щоб телефон оновив назву ПК при оновленні команд
+        return jsonify(m)
+
+    # ------------------------------------------------------------ файли
+    @app.get("/fs/roots")
+    @require_device
+    def fs_roots():
+        """Список дозволених коренів (для перемикача теки на телефоні)."""
+        return jsonify({"roots": [{"key": k, "label": lbl}
+                                  for k, (lbl, _p) in _fs_roots().items()]})
+
+    @app.get("/fs/list")
+    @require_device
+    def fs_list():
+        """Вміст теки в межах дозволеного кореня. ?root=downloads&rel=sub/dir"""
+        import os
+        root = request.args.get("root", "downloads")
+        rel = request.args.get("rel", "")
+        target = _safe_path(root, rel)
+        if target is None or not target.is_dir():
+            return "Тека недоступна", 400
+        entries = []
+        try:
+            for e in sorted(target.iterdir(),
+                            key=lambda p: (not p.is_dir(), p.name.lower())):
+                try:
+                    st = e.stat()
+                    entries.append({
+                        "name": e.name,
+                        "is_dir": e.is_dir(),
+                        "size": st.st_size if e.is_file() else 0,
+                        "mtime": int(st.st_mtime),
+                    })
+                except OSError:
+                    continue
+        except Exception as ex:
+            return f"Помилка читання: {ex}", 500
+        base = _fs_roots()[root][1]
+        return jsonify({
+            "root": root,
+            "rel": rel,
+            "cwd": str(target),
+            "at_root": os.path.normpath(str(target)) == os.path.normpath(base),
+            "entries": entries,
+        })
+
+    @app.get("/fs/download")
+    @require_device(high_rate=True)
+    def fs_download():
+        """Віддає файл із дозволеної теки на телефон. ?root=..&rel=path/file.ext"""
+        root = request.args.get("root", "downloads")
+        rel = request.args.get("rel", "")
+        target = _safe_path(root, rel)
+        if target is None or not target.is_file():
+            return "Файл недоступний", 400
+        return send_file(str(target), as_attachment=True,
+                         download_name=target.name, conditional=True)
+
+    @app.route("/fs/upload", methods=["POST"])
+    @require_device
+    def fs_upload():
+        """Приймає файл із телефона у дозволену теку. multipart 'file' + ?root=&rel="""
+        root = request.args.get("root", "downloads")
+        rel = request.args.get("rel", "")
+        target_dir = _safe_path(root, rel)
+        if target_dir is None or not target_dir.is_dir():
+            return "Тека недоступна", 400
+        f = request.files.get("file")
+        if f is None or not f.filename:
+            return "Немає файлу", 400
+        from werkzeug.utils import secure_filename
+        name = secure_filename(f.filename) or "upload.bin"
+        dest = target_dir / name
+        try:
+            f.save(str(dest))
+        except Exception as ex:
+            return f"Помилка збереження: {ex}", 500
+        REGISTRY.update(SVC_API, detail=f"Отримано файл: {name}", touch=True)
+        logger.info("Отримано файл з телефона: %s", dest)
+        return f"Збережено: {name}"
+
+    # ------------------------------------------------------------ текст на ПК
+    @app.route("/type_text", methods=["GET", "POST"])
+    @require_device
+    def type_text():
+        """Кладе текст у буфер ПК (за замовч.) або вставляє у активне вікно.
+        Параметри: text=..., action=clipboard|paste (paste = буфер + Ctrl+V)."""
+        text = request.values.get("text", "")
+        action = request.values.get("action", "clipboard")
+        if not text:
+            return "Порожній текст", 400
+        # кладемо в буфер (перевикористовуємо наявну логіку через внутрішній виклик)
+        try:
+            import ctypes
+            from ctypes import c_void_p, c_size_t
+            CF_UNICODETEXT = 13
+            GMEM_MOVEABLE = 0x0002
+            k32, u32 = ctypes.windll.kernel32, ctypes.windll.user32
+            k32.GlobalAlloc.restype = c_void_p
+            k32.GlobalAlloc.argtypes = [ctypes.c_uint, c_size_t]
+            k32.GlobalLock.restype = c_void_p
+            k32.GlobalLock.argtypes = [c_void_p]
+            k32.GlobalUnlock.argtypes = [c_void_p]
+            u32.SetClipboardData.restype = c_void_p
+            u32.SetClipboardData.argtypes = [ctypes.c_uint, c_void_p]
+            raw = text.encode("utf-16-le") + b"\x00\x00"
+            handle = k32.GlobalAlloc(GMEM_MOVEABLE, len(raw))
+            ptr = k32.GlobalLock(handle)
+            ctypes.memmove(ptr, raw, len(raw))
+            k32.GlobalUnlock(handle)
+            if not _open_clipboard_retry(u32):
+                k32.GlobalFree(handle)
+                return "Буфер зайнятий", 503
+            u32.EmptyClipboard()
+            u32.SetClipboardData(CF_UNICODETEXT, handle)
+            u32.CloseClipboard()
+        except Exception as ex:
+            return f"Помилка: {ex}", 500
+        if action == "paste":
+            # Ctrl+V у активне вікно
+            try:
+                _send_hotkey([VK_CONTROL], 0x56)  # V
+            except Exception:
+                pass
+            return f"Вставлено ({len(text)} символів)"
+        return f"Скопійовано в буфер ПК ({len(text)} символів)"
+
+    # ------------------------------------------------------------ логи
+    @app.get("/logs/tail")
+    @require_device(high_rate=True)
+    def logs_tail():
+        """Хвіст лог-файлу (для діагностики з телефона). ?source=api&lines=N"""
+        sources = {
+            "api": paths.APP_LOG,
+            "security": paths.SECURITY_LOG,
+            "sorter": paths.SORTER_LOG,
+        }
+        source = request.args.get("source", "api")
+        try:
+            lines = max(10, min(1000, int(request.args.get("lines", "200"))))
+        except ValueError:
+            lines = 200
+        f = sources.get(source)
+        if f is None or not f.exists():
+            return jsonify({"text": "", "note": "лог відсутній"})
+        try:
+            with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                tail = fh.readlines()[-lines:]
+            return jsonify({"text": "".join(tail), "source": source})
+        except Exception as ex:
+            return jsonify({"text": f"Помилка: {ex}"})
 
     return app
 

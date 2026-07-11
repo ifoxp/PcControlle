@@ -199,6 +199,19 @@ def pairing_payload() -> dict:
     }
 
 
+def set_device_hidden(device_id: str, hidden: bool) -> bool:
+    """Позначає пристрій як схований (у звичайному списку не показується).
+    Постійна ознака (зберігається). True, якщо знайдено."""
+    with _lock:
+        data = _load()
+        for d in data["devices"]:
+            if d.get("id") == device_id:
+                d["hidden"] = bool(hidden)
+                _save(data)
+                return True
+    return False
+
+
 def revoke(device_id: str) -> bool:
     """Відкликає пристрій (видаляє з реєстру). True, якщо знайдено."""
     with _lock:

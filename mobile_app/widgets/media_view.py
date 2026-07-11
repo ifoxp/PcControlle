@@ -58,6 +58,27 @@ def _media_scan(path: str) -> None:
         pass
 
 
+def downloads_dir() -> str:
+    """Повертає доступну для запису теку завантажень (Download), створює за потреби.
+    Спільний хелпер — використовується file_browser/video для збереження файлів."""
+    for d in ("/storage/emulated/0/Download",
+              os.path.join(os.path.expanduser("~"), "Downloads"),
+              os.path.join(os.path.expanduser("~"), "Download"),
+              tempfile.gettempdir()):
+        try:
+            os.makedirs(d, exist_ok=True)
+            if os.access(d, os.W_OK):
+                return d
+        except Exception:
+            continue
+    return tempfile.gettempdir()
+
+
+def media_scan(path: str) -> None:
+    """Публічний аліас _media_scan (щоб інші віджети індексували завантажене)."""
+    _media_scan(path)
+
+
 def _save_to_gallery(ctx: WidgetContext, data: bytes, is_image: bool) -> None:
     """
     Зберігає у Галерею (DCIM). Зображення → JPEG (краще індексується) + media scan.
@@ -129,11 +150,16 @@ def present_bytes(ctx: WidgetContext, data: bytes, *, kind: str, title: str) -> 
         # екран (особливо коли телефон повернути горизонтально під ландшафтний скрін)
         img_viewer = ft.InteractiveViewer(
             min_scale=0.8, max_scale=6.0,
-            content=ft.Image(src=tmp_path, fit=ft.BoxFit.CONTAIN),
+            content=ft.Image(src=tmp_path, fit=ft.BoxFit.CONTAIN, expand=True),
             expand=True,
         )
+        # обгортка з центруванням: без неї у горизонтальній орієнтації зображення
+        # тулилось ліворуч (вільне місце по ширині не розподілялось). alignment.center
+        # тримає його по центру екрана.
         body = ft.GestureDetector(
-            content=img_viewer, expand=True,
+            content=ft.Container(content=img_viewer, expand=True,
+                                 alignment=ft.Alignment.CENTER),
+            expand=True,
             on_tap=lambda _: _toggle_bar(),
         )
     else:

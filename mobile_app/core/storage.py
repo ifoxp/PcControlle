@@ -85,6 +85,18 @@ class Storage:
             data["active"] = pcs[0]["id"] if pcs else ""
         self._write(data)
 
+    def rename_pc(self, pc_id: str, name: str) -> None:
+        """Оновити назву ПК (напр. hostname з /manifest при оновленні команд)."""
+        name = (name or "").strip()
+        if not name:
+            return
+        data = self._read()
+        for p in data.get("pcs", []):
+            if p["id"] == pc_id and p.get("name") != name:
+                p["name"] = name
+                self._write(data)
+                return
+
     def set_active(self, pc_id: str) -> None:
         data = self._read()
         data["active"] = pc_id

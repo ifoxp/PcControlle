@@ -1,15 +1,21 @@
 """
-Автозапуск PC Control при вході в Windows — З АДМІН-ПРАВАМИ, без UAC щоразу.
+Права адміністратора + автозапуск PC Control.
 
-Механізм: задача в Планувальнику Windows (schtasks) із RunLevel=HIGHEST і тригером
-ONLOGON. Планувальник має привілей запускати процес з найвищими правами БЕЗ запиту
-UAC — тож при кожному вході програма стартує з правами адміна тихо.
+Ієрархія (за рішенням користувача):
+  * ПРАВА АДМІНА — головне. Потрібні не лише для автозапуску, а й зараз: без них
+    моніторинг не читає температуру CPU (LibreHardwareMonitor), не можна закрити
+    захищені процеси тощо. Увімкнення → перезапуск програми з підвищенням (UAC).
+  * АВТОЗАПУСК — залежить від прав. Вмикається лише коли програма вже з правами
+    адміна; створює задачу в Планувальнику (schtasks) з RunLevel=HIGHEST і
+    тригером ONLOGON — при вході Windows стартує програму підвищеною БЕЗ UAC.
 
-UAC вискочить РІВНО ОДИН РАЗ — під час створення задачі (бо schtasks для
-RunLevel=HIGHEST потребує підвищення). Далі — ніколи.
+Так немає плутанини «реєстр vs задача» і двох способів старту: один шлях —
+задача Планувальника. Register-режим прибрано.
 
-Права адміна дають: температуру CPU (LibreHardwareMonitor), kill захищених
-процесів, надійніші power-дії.
+Історичні баги, які тут виправлено:
+  * DisallowStartIfOnBatteries=true (дефолт schtasks) → на батареї не стартувало;
+  * лапки в <Command> ламали запуск exe без аргументів;
+  * «успіх» повертався навіть коли підвищений процес падав.
 """
 
 from __future__ import annotations
@@ -26,64 +32,14 @@ TASK_NAME = "PC Control Autostart"
 CREATE_NO_WINDOW = 0x08000000
 
 
-def _exe_path() -> str:
-    """Шлях до .exe (frozen) або до python+main.py (розробка)."""
+def _exe_cmd() -> str:
+    """Команда запуску: .exe (frozen) або python+main.py (розробка), без зовн. лапок."""
     if getattr(sys, "frozen", False):
-        return f'"{sys.executable}"'
+        return sys.executable
     return f'"{sys.executable}" "{paths.BASE_DIR / "main.py"}"'
 
 
-def is_enabled() -> bool:
-    """Чи існує задача автозапуску."""
-    try:
-        r = subprocess.run(["schtasks", "/query", "/tn", TASK_NAME],
-                           capture_output=True, text=True, timeout=8,
-                           creationflags=CREATE_NO_WINDOW)
-        return r.returncode == 0
-    except Exception:
-        return False
-
-
-def enable() -> tuple[bool, str]:
-    """
-    Створює задачу автозапуску з найвищими правами. Повертає (успіх, повідомлення).
-    Викличе UAC один раз (schtasks /rl highest потребує підвищення).
-    """
-    try:
-        cmd = [
-            "schtasks", "/create", "/tn", TASK_NAME,
-            "/tr", _exe_path(),
-            "/sc", "onlogon",          # при вході в систему
-            "/rl", "highest",          # найвищі права (без UAC при старті)
-            "/f",                       # перезаписати, якщо існує
-        ]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15,
-                          creationflags=CREATE_NO_WINDOW)
-        if r.returncode == 0:
-            logger.info("Автозапуск з правами УВІМКНЕНО (задача '%s').", TASK_NAME)
-            return True, "Автозапуск з правами адміна увімкнено"
-        # типово: немає прав створити highest-задачу без підвищення
-        msg = (r.stderr or r.stdout or "").strip()
-        logger.warning("Не вдалося створити задачу: %s", msg)
-        return False, msg or "Потрібні права адміністратора"
-    except Exception as e:
-        logger.error("enable autostart error: %s", e)
-        return False, str(e)
-
-
-def disable() -> tuple[bool, str]:
-    """Видаляє задачу автозапуску."""
-    try:
-        r = subprocess.run(["schtasks", "/delete", "/tn", TASK_NAME, "/f"],
-                          capture_output=True, text=True, timeout=10,
-                          creationflags=CREATE_NO_WINDOW)
-        ok = r.returncode == 0
-        if ok:
-            logger.info("Автозапуск вимкнено.")
-        return ok, "Автозапуск вимкнено" if ok else (r.stderr or "Помилка")
-    except Exception as e:
-        return False, str(e)
-
+# ============================================================ статус
 
 def is_admin() -> bool:
     """Чи запущено з правами адміністратора зараз."""
@@ -94,25 +50,138 @@ def is_admin() -> bool:
         return False
 
 
-def enable_elevated() -> tuple[bool, str]:
-    """
-    Вмикає автозапуск. Якщо зараз БЕЗ прав адміна — просить підвищення (UAC) і
-    створює задачу в підвищеному процесі, який одразу завершується (сам застосунок
-    працює далі). Так UAC вискакує рівно раз — при налаштуванні.
-    """
-    if is_admin():
-        return enable()
+def is_enabled() -> bool:
+    """Чи ввімкнено автозапуск (існує задача Планувальника)."""
     try:
-        import ctypes
-        # запускаємо себе з прапорцем --setup-autostart через ShellExecute "runas"
-        # (це викличе UAC). Підвищений процес створить задачу і вийде.
-        params = "--setup-autostart"
-        if not getattr(sys, "frozen", False):
-            params = f'"{paths.BASE_DIR / "main.py"}" --setup-autostart'
-        rc = ctypes.windll.shell32.ShellExecuteW(
-            None, "runas", sys.executable, params, None, 0)  # 0 = SW_HIDE
-        if int(rc) > 32:
-            return True, "Запит прав надіслано — підтвердь UAC. Автозапуск налаштується."
-        return False, "UAC відхилено"
+        r = subprocess.run(["schtasks", "/query", "/tn", TASK_NAME],
+                           capture_output=True, text=True, timeout=8,
+                           creationflags=CREATE_NO_WINDOW)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+# ============================================================ задача Планувальника
+
+def _task_xml() -> str:
+    """XML задачі: ONLOGON, RunLevel=HIGHEST, БЕЗ заборони старту на батареї."""
+    import getpass
+    cmd = _exe_cmd()
+    user = getpass.getuser()
+    return f"""<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Author>{user}</Author>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger><Enabled>true</Enabled></LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>false</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Enabled>true</Enabled>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>{cmd}</Command>
+    </Exec>
+  </Actions>
+</Task>"""
+
+
+def _task_create() -> tuple[bool, str]:
+    """Створює highest-задачу з XML. Потребує адмін-прав у поточному процесі."""
+    import tempfile
+    import os
+    if not is_admin():
+        return False, "Потрібні права адміністратора"
+    try:
+        fd, path = tempfile.mkstemp(suffix=".xml")
+        os.close(fd)
+        with open(path, "w", encoding="utf-16") as f:
+            f.write(_task_xml())
+        try:
+            r = subprocess.run(
+                ["schtasks", "/create", "/tn", TASK_NAME, "/xml", path, "/f"],
+                capture_output=True, text=True, timeout=15,
+                creationflags=CREATE_NO_WINDOW)
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        if r.returncode == 0:
+            logger.info("Автозапуск (Планувальник, HIGHEST) увімкнено.")
+            return True, "Автозапуск увімкнено"
+        msg = (r.stderr or r.stdout or "").strip()
+        logger.warning("schtasks /create помилка: %s", msg)
+        return False, msg or "Помилка створення задачі"
+    except Exception as e:
+        logger.error("task create error: %s", e)
+        return False, str(e)
+
+
+def _task_delete() -> tuple[bool, str]:
+    """Видаляє задачу автозапуску. Теж потребує адмін-прав."""
+    if not is_admin():
+        return False, "Потрібні права адміністратора"
+    try:
+        r = subprocess.run(["schtasks", "/delete", "/tn", TASK_NAME, "/f"],
+                          capture_output=True, text=True, timeout=10,
+                          creationflags=CREATE_NO_WINDOW)
+        if r.returncode == 0:
+            logger.info("Автозапуск вимкнено.")
+            return True, "Автозапуск вимкнено"
+        return False, (r.stderr or "Помилка").strip()
     except Exception as e:
         return False, str(e)
+
+
+# ============================================================ перезапуск з правами
+
+def relaunch_as_admin() -> bool:
+    """
+    Перезапускає ЦЮ програму з правами адміна (UAC). Повертає True, якщо
+    підвищений процес стартував — тоді викликач має завершити поточний
+    (не-адмін) процес. Якщо ми вже адмін — нічого не робить, повертає False.
+    """
+    if is_admin():
+        return False
+    try:
+        import ctypes
+        params = ""
+        if not getattr(sys, "frozen", False):
+            params = f'"{paths.BASE_DIR / "main.py"}"'
+        SW_SHOWNORMAL = 1
+        rc = ctypes.windll.shell32.ShellExecuteW(
+            None, "runas", sys.executable, params or None, None, SW_SHOWNORMAL)
+        if int(rc) > 32:
+            logger.info("Перезапуск з правами адміна ініційовано.")
+            return True
+        logger.warning("UAC відхилено (rc=%s)", rc)
+        return False
+    except Exception as e:
+        logger.error("relaunch_as_admin error: %s", e)
+        return False
+
+
+# ============================================================ публічне API (для UI)
+
+def enable_autostart() -> tuple[bool, str]:
+    """Вмикає автозапуск (задача Планувальника). Потребує поточних адмін-прав."""
+    return _task_create()
+
+
+def disable_autostart() -> tuple[bool, str]:
+    """Вимикає автозапуск. Потребує поточних адмін-прав."""
+    return _task_delete()

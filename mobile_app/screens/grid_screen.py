@@ -98,14 +98,16 @@ class GridScreen(ft.Container):
     def _apply_grid_config(self) -> None:
         s = self.storage.get_settings()
         align = s.get("align", "center")
-        # GridView expand=True + власний скрол: коли іконок багато — гортається;
-        # вертикальне вирівнювання застосовуємо до обгортки-Column. Щоб center/bottom
-        # працювали, коли вміст ВЛАЗИТЬ, і водночас був скрол коли НЕ влазить —
-        # GridView сам скролиться (expand дає йому обмежену висоту), а alignment
-        # обгортки зсуває сітку в межах вільного місця.
-        self._grid.expand = True
+        # Вирівнювання (top/center/bottom) працює лише коли GridView НЕ expand:
+        # якщо він expand=True — займає всю висоту, і alignment обгортки нема куди
+        # зсувати (сітка завжди «зверху»). Тому робимо GridView з природною висотою,
+        # а обгортку-Column — скроливою (коли іконок багато — гортається; коли влазять
+        # — alignment зсуває їх угору/центр/вниз).
+        self._grid.expand = False
         self._grid.runs_count = int(s.get("columns", 4))
         if hasattr(self, "_grid_col"):
+            self._grid_col.expand = True
+            self._grid_col.scroll = ft.ScrollMode.AUTO
             self._grid_col.horizontal_alignment = ft.CrossAxisAlignment.STRETCH
             self._grid_col.alignment = {
                 "top": ft.MainAxisAlignment.START,
@@ -115,7 +117,15 @@ class GridScreen(ft.Container):
         self._align = align
 
     def apply_settings(self) -> None:
-        """Перезастосувати налаштування вигляду (після зміни в Налаштуваннях)."""
+        """Перезастосувати налаштування вигляду (після зміни в Налаштуваннях).
+        НЕ робимо page.update() тут: коли викликається з таба «Вигляд», сітка
+        НЕ змонтована, і update давав або порожній екран, або дублі плиток при
+        подальшому показі. Реальний рендер — у refresh_now() при вході в Команди."""
+        self._apply_grid_config()
+
+    def refresh_now(self) -> None:
+        """Свіжо перемалювати сітку з кешу + застосувати вигляд. Викликати В МОМЕНТ
+        показу таба «Команди» (тоді сітка змонтована й update чіпляє її коректно)."""
         self._apply_grid_config()
         self._render_current()
         self._safe_update()
@@ -232,6 +242,9 @@ class GridScreen(ft.Container):
             try:
                 manifest = ApiClient(pc).manifest()
                 self.storage.save_manifest(pc["id"], manifest)
+                # оновити назву ПК з hostname (сервер віддає у server_name)
+                if manifest.get("server_name"):
+                    self.storage.rename_pc(pc["id"], manifest["server_name"])
                 # авто-стилізація при першому паруванні (кольори за групою,
                 # підтвердження тільки на shutdown)
                 self.storage.apply_default_styling(manifest.get("commands", []))

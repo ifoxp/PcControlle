@@ -34,13 +34,5 @@ if __name__ == "__main__":
             sys.exit(1)
         sys.exit(0)
 
-    # Підвищений процес для налаштування автозапуску: створює задачу в
-    # Планувальнику (потребує адмін-прав) і одразу виходить. Викликається кнопкою
-    # «Автозапуск з правами» через ShellExecute runas (UAC один раз).
-    if len(sys.argv) >= 2 and sys.argv[1] == "--setup-autostart":
-        from pc_control.core import autostart
-        ok, _msg = autostart.enable()
-        sys.exit(0 if ok else 1)
-
     from pc_control.app import main
     sys.exit(main())

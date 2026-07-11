@@ -16,13 +16,21 @@ hiddenimports = (
     + ['wmi']
     # процеси/монітори (close_app, /monitors, power caps)
     + ['psutil', 'win32api', 'win32gui', 'win32process', 'win32con']
+    # температура CPU/GPU через LibreHardwareMonitor (.NET через pythonnet)
+    + ['clr', 'pythonnet', 'clr_loader']
 )
+
+# LibreHardwareMonitor DLL + її .NET-залежності кладемо ПОРУЧ з .exe (не в _MEIPASS),
+# бо monitoring._read_temps_lhm шукає їх за paths.BASE_DIR (= папка exe). Формат
+# datas: (джерело, '.' = корінь dist).
+import glob as _glob
+_lhm_dlls = [(f, '.') for f in _glob.glob('pc_control/lib/*.dll')]
 
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('pc_control/assets/*', 'pc_control/assets')],
+    datas=[('pc_control/assets/*', 'pc_control/assets')] + _lhm_dlls,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},

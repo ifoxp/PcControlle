@@ -50,9 +50,16 @@ def _open_view(ctx: WidgetContext, title: str, build_body, on_close=lambda: None
 def build_touchpad_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
     path = cmd.get("path", "/mouse")
 
+    # Таймаут неактивності: якщо стільки секунд не було жодного руху/кліку,
+    # persistent-зʼєднання розривається (щоб не тримати сокет марно). Наступна
+    # дія відкриє його знову — перший запит буде трохи довший, далі знов швидко.
+    IDLE_CLOSE_SEC = 8.0
+
     def send(params: dict):
         def work():
             try:
+                # гарантуємо відкриту keep-alive сесію перед серією рухів
+                ctx.client.open_session()
                 ctx.client.get_text(path, params)
             except Exception:
                 pass
@@ -64,6 +71,34 @@ def build_touchpad_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
         # 30-50мс → «лютий тротлінг»). Замість цього сумуємо дельту й шлемо ОДИН
         # запит раз на ~55мс сумарним зсувом — плавно й без лагу.
         acc = {"dx": 0.0, "dy": 0.0, "t": 0.0}
+
+        # Відкриваємо persistent-зʼєднання одразу на вході в меню: перший рух
+        # уже піде по готовому TLS-каналу, без рукостискання «на льоту».
+        try:
+            ctx.client.open_session()
+        except Exception:
+            pass
+
+        # Сторож неактивності: тримає з'єднання, поки користувач водить пальцем;
+        # після IDLE_CLOSE_SEC тиші тихо закриває сесію. Кожен рух оновлює
+        # мітку останньої активності (acc["t"]).
+        idle = {"stop": False}
+
+        def _idle_watch():
+            import time as _t
+            while not idle["stop"]:
+                _t.sleep(1.0)
+                if idle["stop"]:
+                    break
+                last = acc.get("act", 0.0)
+                if last and (_t.monotonic() - last) > IDLE_CLOSE_SEC:
+                    try:
+                        ctx.client.close_session()
+                    except Exception:
+                        pass
+                    acc["act"] = 0.0  # закрито — чекаємо наступної дії
+
+        ctx.page.run_thread(_idle_watch)
 
         def _flush():
             import time as _t
@@ -77,13 +112,19 @@ def build_touchpad_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
                 acc["t"] = now
                 send({"action": "move", "dx": dx, "dy": dy})
 
+        def _touch():
+            import time as _t
+            acc["act"] = _t.monotonic()  # відмітка активності для сторожа
+
         def on_pan(e):
+            _touch()
             d = getattr(e, "local_delta", None)
             acc["dx"] += (getattr(d, "x", 0) or 0) * sens["v"]
             acc["dy"] += (getattr(d, "y", 0) or 0) * sens["v"]
             _flush()
 
         def on_scroll(e):
+            _touch()
             d = getattr(e, "local_delta", None)
             dy = getattr(d, "y", 0) or 0
             send({"action": "scroll", "dy": 1 if dy < 0 else -1})
@@ -119,21 +160,63 @@ def build_touchpad_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
                                 weight=ft.FontWeight.BOLD),
                 bgcolor=theme.SURFACE_HI, border_radius=12, expand=True, height=70,
                 alignment=ft.Alignment.CENTER, ink=True,
-                on_click=lambda _: send({"action": "click", "button": "left"}),
+                on_click=lambda _: (_touch(), send({"action": "click", "button": "left"})),
             )
             rmb = ft.Container(
                 content=ft.Text("ПКМ", color=theme.TEXT, text_align=ft.TextAlign.CENTER,
                                 weight=ft.FontWeight.BOLD),
                 bgcolor=theme.SURFACE_HI, border_radius=12, expand=True, height=70,
                 alignment=ft.Alignment.CENTER, ink=True,
-                on_click=lambda _: send({"action": "click", "button": "right"}),
+                on_click=lambda _: (_touch(), send({"action": "click", "button": "right"})),
             )
+            # рядок вводу тексту → на ПК (у буфер або вставити Ctrl+V у активне вікно)
+            text_field = ft.TextField(
+                hint_text="Текст на ПК…", color=theme.TEXT, expand=True,
+                dense=True, multiline=False,
+            )
+
+            def send_text(paste: bool):
+                txt = text_field.value or ""
+                if not txt:
+                    return
+                _touch()
+                def work():
+                    try:
+                        ctx.client.open_session()
+                        ctx.client.post_json("/type_text", params={
+                            "text": txt, "action": "paste" if paste else "clipboard"})
+                        ctx.toast("Вставлено на ПК" if paste else "У буфер ПК")
+                    except Exception as e:
+                        ctx.toast(str(e), error=True)
+                ctx.run_async(work)
+                text_field.value = ""
+                try: ctx.page.update()
+                except Exception: pass
+
+            text_row = ft.Row([
+                text_field,
+                ft.IconButton(ft.Icons.CONTENT_PASTE, icon_color=theme.ACCENT,
+                              tooltip="У буфер ПК",
+                              on_click=lambda _: send_text(False)),
+                ft.IconButton(ft.Icons.KEYBOARD_RETURN, icon_color=theme.OK,
+                              tooltip="Вставити у активне вікно (Ctrl+V)",
+                              on_click=lambda _: send_text(True)),
+            ], spacing=4)
             return ft.Column([
                 ft.Row([pad, scroll_strip], expand=True, spacing=8),
                 ft.Row([lmb, rmb], spacing=10),
+                text_row,
             ], expand=True, spacing=10)
 
-        _open_view(ctx, "Мишка — тачпад", body)
+        def _on_close():
+            # вихід із меню тачпада → зупиняємо сторожа й розриваємо зʼєднання
+            idle["stop"] = True
+            try:
+                ctx.client.close_session()
+            except Exception:
+                pass
+
+        _open_view(ctx, "Мишка — тачпад", body, on_close=_on_close)
 
     return grid_tile(cmd, open_pad, on_long_press=ctx.on_edit,
                      columns=cmd.get("_columns", 4))
@@ -144,9 +227,14 @@ def build_monitor_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
     base = cmd.get("path", "/monitor")
 
     def open_monitor():
-        state = {"running": False}
+        # running — чи накопичуємо статистику для звіту (кнопка «Записувати»);
+        # open — чи екран монітора відкритий (керує авто-циклом оновлення).
+        state = {"running": False, "open": False}
         grid = ft.Column(spacing=8, scroll=ft.ScrollMode.AUTO, expand=True)
-        win_lbl = ft.Text("", color=theme.ACCENT, size=13, weight=ft.FontWeight.BOLD)
+        win_lbl = ft.Text("", color=theme.ACCENT, size=13, weight=ft.FontWeight.BOLD,
+                          expand=True, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)
+        # сумарне споживання ПК (CPU+GPU) — праворуч зверху, біля активного вікна
+        power_lbl = ft.Text("", color=theme.WARN, size=15, weight=ft.FontWeight.BOLD)
         dur_lbl = ft.Text("", color=theme.TEXT_DIM, size=12)
         cores_wrap = ft.Column(spacing=6)  # рядки ядер (симетрично по N у ряд)
 
@@ -255,6 +343,9 @@ def build_monitor_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
         def render(data: dict):
             m = data.get("metrics", {})
             win_lbl.value = "▶ " + (data.get("active_window") or "—")
+            # сумарне споживання ПК (CPU+GPU) — праворуч зверху
+            total_p = (m.get("total_power") or {}).get("last")
+            power_lbl.value = f"⚡ {total_p} Вт" if total_p is not None else ""
             dur_lbl.value = (f"сесія {data.get('duration_sec', 0)} с · "
                              + ("● запис" if data.get("running") else "стоп"))
             # CPU: велика плитка + ядра. Групуємо потоки по 2 в одне ядро.
@@ -316,9 +407,7 @@ def build_monitor_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
             except Exception:
                 pass
 
-        # Оновлення — ПО КНОПЦІ (надійно: той самий механізм, що й інші кнопки;
-        # авто-цикл на Flet-Android був нестабільний). Кожен тап «Оновити» = один
-        # запит /data. «Записувати» вмикає накопичення статистики для звіту.
+        # Ручне оновлення (кнопка «Оновити») — один запит /data.
         def refresh(_=None):
             def work():
                 try:
@@ -340,14 +429,28 @@ def build_monitor_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
                     pass
             ctx.run_async(work)
 
-        def body(close):
-            def start_rec(_):
-                state["running"] = True
-                _do("start")
-                ctx.toast("Запис почато — потім тисни «Завершити» для звіту")
+        # АВТО-ОНОВЛЕННЯ: цикл через page.run_task + asyncio.sleep (той самий
+        # надійний механізм, що й стрім екрана). Поки екран монітора відкритий —
+        # раз на секунду тягнемо /data і перемальовуємо. Запити в окремому потоці
+        # (asyncio.to_thread), щоб не блокувати UI.
+        async def _auto_loop():
+            import asyncio
+            while state["open"]:
+                try:
+                    data = await asyncio.to_thread(ctx.client.get_json, f"{base}/data")
+                    render(data)
+                except Exception as e:
+                    win_lbl.value = f"Помилка: {str(e)[:60]}"
+                    win_lbl.color = theme.DANGER
+                    try: ctx.page.update()
+                    except Exception: pass
+                await asyncio.sleep(1.0)
 
+        def body(close):
             def reset(_):
+                # почати запис статистики з нуля з цього моменту
                 _do("reset")
+                ctx.toast("Запис почато з нуля")
 
             def finish(_):
                 state["running"] = False
@@ -360,25 +463,31 @@ def build_monitor_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
                         ctx.toast(str(e), error=True)
                 ctx.run_async(work)
 
-            refresh_btn = ft.FilledButton(
-                "Оновити", icon=ft.Icons.REFRESH, on_click=refresh,
-                height=52, width=10000)
-            rec_btns = ft.Row([
-                ft.OutlinedButton("Записувати", icon=ft.Icons.FIBER_MANUAL_RECORD,
-                                  on_click=start_rec, expand=True),
-                ft.OutlinedButton("Скинути", icon=ft.Icons.RESTART_ALT,
-                                  on_click=reset, expand=True),
-                ft.FilledButton("Завершити", icon=ft.Icons.STOP,
-                                on_click=finish, expand=True),
-            ], spacing=8)
-            return ft.Column([win_lbl, dur_lbl, ft.Divider(color=theme.BORDER),
-                              grid, refresh_btn, rec_btns], expand=True, spacing=8)
+            # Запис іде автоматично з моменту відкриття. Лишаємо 2 кнопки:
+            # «Скинути» — почати рахунок статистики з нуля; «Завершити» — звіт.
+            H = 50
+            btn_reset = ft.OutlinedButton("Скинути", icon=ft.Icons.RESTART_ALT,
+                                          on_click=reset, expand=True, height=H)
+            btn_finish = ft.FilledButton("Завершити", icon=ft.Icons.STOP,
+                                         on_click=finish, expand=True, height=H)
+            btns = ft.Row([btn_reset, btn_finish], spacing=8)
+            # верхній рядок: активне вікно ліворуч (розтягнуте) + вати праворуч
+            top_row = ft.Row([win_lbl, power_lbl],
+                             vertical_alignment=ft.CrossAxisAlignment.CENTER)
+            return ft.Column([top_row, dur_lbl, ft.Divider(color=theme.BORDER),
+                              grid, btns], expand=True, spacing=8)
 
-        _open_view(ctx, "Моніторинг ПК", body,
-                   on_close=lambda: (state.update(running=False), _do("stop")))
-        # старт запису + перший показ даних одразу при відкритті
+        def _on_close():
+            state["open"] = False
+            state["running"] = False
+            _do("stop")
+
+        _open_view(ctx, "Моніторинг ПК", body, on_close=_on_close)
+        # старт: вмикаємо збір + запускаємо авто-цикл оновлення
+        state["open"] = True
         state["running"] = True
         _do("start")
+        ctx.page.run_task(_auto_loop)
 
     return grid_tile(cmd, open_monitor, on_long_press=ctx.on_edit,
                      columns=cmd.get("_columns", 4))
@@ -468,61 +577,203 @@ def build_stream_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
     def open_stream():
         import os
         import tempfile
-        state = {"running": False, "fps": 4, "n": 0}
-        img = ft.Image(fit=ft.BoxFit.CONTAIN, expand=True)
+        import time as _time
+        # session — унікальний префікс на КОЖНЕ відкриття (щоб старі кадри з
+        # минулого сеансу не показувались). n — лічильник кадрів.
+        state = {"running": False, "fps": 4, "n": 0,
+                 "sess": int(_time.time()), "prev": None}
+        # Flet 0.85: ft.Image ВИМАГАЄ src при створенні. gapless_playback=True —
+        # Flet ТРИМАЄ попередній кадр, поки вантажиться новий → без блимання.
+        img = ft.Image(src="", fit=ft.BoxFit.CONTAIN, expand=True,
+                       gapless_playback=True)
         status = ft.Text("Підключення до екрана…", color=theme.TEXT_DIM, size=13)
-        frames = [os.path.join(tempfile.gettempdir(), f"pcstream_{i}.jpg") for i in (0, 1)]
-        flip = {"i": 0}
+        tmp = tempfile.gettempdir()
+
+        # keep-alive: стрім шле кадри часто, persistent-зʼєднання прибирає
+        # TLS-handshake на кожен кадр (як у тачпаді).
+        try:
+            ctx.client.open_session()
+        except Exception:
+            pass
 
         async def _loop():
+            # той самий надійний патерн, що в моніторі: asyncio.sleep без
+            # get_event_loop() (той на serious_python/Android кидав і валив цикл).
+            import asyncio as _a
             while state["running"]:
-                t0 = asyncio.get_event_loop().time()
                 try:
-                    data = await asyncio.to_thread(
+                    data = await _a.to_thread(
                         ctx.client.get_bytes, "/screenshot", {"monitor": "0"})
-                    p = frames[flip["i"]]
+                    # УНІКАЛЬНЕ імʼя кожного кадру: Flet/Android кешує зображення
+                    # за шляхом файлу, тож перезапис того самого файлу НЕ оновлював
+                    # картинку (виглядало як «зациклені 4 кадри»). Нове імʼя = нова
+                    # картинка. Старий файл видаляємо, щоб не засмічувати tmp.
+                    state["n"] += 1
+                    p = os.path.join(tmp, f"pcstream_{state['sess']}_{state['n']}.jpg")
                     with open(p, "wb") as f:
                         f.write(data)
-                    flip["i"] ^= 1
                     img.src = p
-                    state["n"] += 1
+                    old = state["prev"]
+                    state["prev"] = p
+                    if old:
+                        try: os.remove(old)
+                        except OSError: pass
                     status.value = f"● наживо · кадр {state['n']}"
                     status.color = theme.OK
                     ctx.page.update()
                 except Exception as e:
-                    status.value = f"помилка кадру: {str(e)[:60]}"
+                    status.value = f"помилка кадру: {str(e)[:70]}"
                     status.color = theme.DANGER
                     try: ctx.page.update()
                     except Exception: pass
-                dt = asyncio.get_event_loop().time() - t0
-                await asyncio.sleep(max(0.0, 1.0 / state["fps"] - dt))
+                await _a.sleep(max(0.05, 1.0 / max(1, state["fps"])))
 
-        def body(close):
-            fps_label = ft.Text(f"{state['fps']} fps", color=theme.ACCENT, size=13)
-            slider = ft.Slider(min=1, max=10, divisions=9, value=state["fps"],
-                               active_color=theme.ACCENT, expand=True)
+        fps_label = ft.Text(f"{state['fps']} fps", color=theme.ACCENT, size=13)
+        slider = ft.Slider(min=1, max=10, divisions=9, value=state["fps"],
+                           active_color=theme.ACCENT, expand=True)
 
-            def on_fps(e):
-                state["fps"] = int(float(slider.value))
-                fps_label.value = f"{state['fps']} fps"
-                try:
-                    ctx.page.update()
-                except Exception:
-                    pass
-            slider.on_change = on_fps
+        def on_fps(e):
+            state["fps"] = int(float(slider.value))
+            fps_label.value = f"{state['fps']} fps"
+            try:
+                ctx.page.update()
+            except Exception:
+                pass
+        slider.on_change = on_fps
 
-            controls = ft.Row([ft.Icon(ft.Icons.SPEED, color=theme.TEXT_DIM),
-                               slider, fps_label], spacing=8)
-            return ft.Column([
+        def close(_=None):
+            try:
+                if hasattr(ctx.page, "_pop_screen"):
+                    ctx.page._pop_screen()
+            except Exception:
+                pass
+
+        # Верхня панель (кнопка «назад» + статус) і нижня (fps). Ховаються тапом
+        # по картинці → чистий fullscreen. Overlay-стиль поверх картинки.
+        top_bar = ft.Container(
+            content=ft.Row([
+                ft.IconButton(ft.Icons.ARROW_BACK, icon_color="white", on_click=close),
                 status,
-                ft.Container(content=img, expand=True, alignment=ft.Alignment.CENTER),
-                controls,
-            ], expand=True, spacing=8)
+            ]), bgcolor="#000000AA", padding=theme.pad(h=6, v=4),
+        )
+        bottom_bar = ft.Container(
+            content=ft.Row([ft.Icon(ft.Icons.SPEED, color="white"),
+                            slider, fps_label], spacing=8),
+            bgcolor="#000000AA", padding=theme.pad(h=10, v=6),
+        )
+        bars = {"visible": True}
 
-        _open_view(ctx, "Екран ПК", body,
-                   on_close=lambda: state.update(running=False))
+        def toggle_bars(_=None):
+            bars["visible"] = not bars["visible"]
+            top_bar.visible = bars["visible"]
+            bottom_bar.visible = bars["visible"]
+            try: ctx.page.update()
+            except Exception: pass
+
+        # Stack: картинка на ВЕСЬ екран (чорний фон), панелі — поверх, тап ховає їх
+        content = ft.Container(
+            bgcolor="#000000", expand=True,
+            content=ft.Stack([
+                ft.GestureDetector(
+                    content=ft.Container(content=img, expand=True,
+                                         alignment=ft.Alignment.CENTER),
+                    on_tap=toggle_bars, expand=True),
+                ft.Column([top_bar, ft.Container(expand=True), bottom_bar],
+                          expand=True),
+            ], expand=True),
+        )
+
+        def _on_close():
+            state["running"] = False
+            try:
+                ctx.client.close_session()
+            except Exception:
+                pass
+            if state.get("prev"):
+                try: os.remove(state["prev"])
+                except OSError: pass
+
+        # title="" → View БЕЗ AppBar (повний екран). Системний «назад» знімає View.
+        if hasattr(ctx.page, "_push_screen"):
+            ctx.page._push_screen(content, title="", on_pop=_on_close)
+        else:
+            ctx.page.views.append(ft.View(controls=[content], padding=0))
+            ctx.page.update()
         state["running"] = True
         ctx.page.run_task(_loop)
 
-    return grid_tile(cmd, open_stream, on_long_press=ctx.on_edit,
+    def _safe_open():
+        # якщо відкриття падає — показати причину (раніше «нічого не відбувалось»)
+        try:
+            open_stream()
+        except Exception as e:
+            ctx.toast(f"Стрім не відкрився: {str(e)[:80]}", error=True)
+
+    return grid_tile(cmd, _safe_open, on_long_press=ctx.on_edit,
+                     columns=cmd.get("_columns", 4))
+
+
+# ============================================================ log_view
+def build_log_view_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
+    """Читає хвіст лог-файлу з ПК з автооновленням. Джерело вибирається (sources)."""
+    base = cmd.get("path", "/logs/tail")
+    p = cmd.get("params", {})
+    sources = p.get("sources") or [{"value": "api", "label": "Лог"}]
+    lines = int(p.get("lines", 200))
+    refresh_sec = float(p.get("refresh_sec", 3))
+
+    def open_logs():
+        state = {"open": False, "source": sources[0]["value"]}
+        text_ctrl = ft.Text("", color=theme.TEXT, size=11, selectable=True,
+                            font_family="monospace")
+        status = ft.Text("", color=theme.TEXT_DIM, size=12)
+
+        def _safe_update():
+            try:
+                ctx.page.update()
+            except Exception:
+                pass
+
+        async def _loop():
+            import asyncio
+            while state["open"]:
+                try:
+                    data = await asyncio.to_thread(
+                        ctx.client.get_json, base,
+                        {"source": state["source"], "lines": lines})
+                    text_ctrl.value = data.get("text", "") or "(порожньо)"
+                    status.value = f"● {state['source']} · оновлюється"
+                    status.color = theme.OK
+                except Exception as e:
+                    status.value = f"Помилка: {str(e)[:60]}"
+                    status.color = theme.DANGER
+                _safe_update()
+                await asyncio.sleep(refresh_sec)
+
+        def body(close):
+            # перемикач джерела
+            chips = []
+            for s in sources:
+                chips.append(ft.FilledButton(
+                    s.get("label", s["value"]),
+                    on_click=lambda _, v=s["value"]: _set_source(v), height=32))
+            log_scroll = ft.Column([text_ctrl], scroll=ft.ScrollMode.AUTO, expand=True)
+            return ft.Column([
+                ft.Row(chips, spacing=6, wrap=True), status,
+                ft.Container(content=log_scroll, expand=True,
+                             bgcolor=theme.SURFACE, border_radius=8,
+                             padding=theme.pad(h=10, v=8)),
+            ], expand=True, spacing=8)
+
+        def _set_source(v):
+            state["source"] = v
+
+        def _on_close():
+            state["open"] = False
+
+        _open_view(ctx, cmd.get("title", "Логи ПК"), body, on_close=_on_close)
+        state["open"] = True
+        ctx.page.run_task(_loop)
+
+    return grid_tile(cmd, open_logs, on_long_press=ctx.on_edit,
                      columns=cmd.get("_columns", 4))

@@ -27,8 +27,14 @@ def _fire(cmd: dict, ctx: WidgetContext, busy: dict, params: dict | None = None)
         set_busy(busy, True)
         ctx.page.update()
         try:
-            resp = ctx.client.get_text(cmd["path"], all_params or None)
-            ctx.toast(resp.strip()[:100] or "Готово")
+            if str(cmd.get("method", "GET")).upper() == "POST":
+                # POST: параметри в query (сервер читає request.values) — просто й
+                # сумісно з наявними ендпоінтами (type_text читає values)
+                resp = ctx.client.post_json(cmd["path"], params=all_params or None)
+                resp = resp.get("text", "") if isinstance(resp, dict) else str(resp)
+            else:
+                resp = ctx.client.get_text(cmd["path"], all_params or None)
+            ctx.toast((resp or "").strip()[:100] or "Готово")
         except Exception as e:
             ctx.toast(str(e), error=True)
         finally:
@@ -126,6 +132,109 @@ def build_picker_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
         theme.show(ctx.page, sheet)
 
     return grid_tile(cmd, open_picker, busy_ref=busy, on_long_press=ctx.on_edit, columns=cmd.get("_columns", 4))
+
+
+# ---------------------------------------------------------------- long_text
+def build_long_text_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
+    """Багаторядкове поле → шле на ПК. Опційно кілька дій (напр. буфер / вставити)."""
+    busy: dict = {}
+    p = cmd.get("params", {})
+    field_name = p.get("name", "text")
+    actions = p.get("actions") or []
+
+    def open_input():
+        field = ft.TextField(
+            label=p.get("label", "Текст"),
+            multiline=True, min_lines=4, max_lines=10,
+            autofocus=True, color=theme.TEXT,
+        )
+
+        def send(action_value=None):
+            theme.dismiss(ctx.page)
+            params = {field_name: field.value}
+            if action_value is not None:
+                params["action"] = action_value
+            _run_with_confirm(cmd, ctx, busy, params)
+
+        # кнопки дій (якщо задані) або одна «Надіслати»
+        btns = []
+        if actions:
+            for a in actions:
+                btns.append(ft.FilledButton(
+                    a.get("label", a["value"]),
+                    on_click=lambda _, v=a["value"]: send(v)))
+        else:
+            btns.append(ft.FilledButton("Надіслати", on_click=lambda _: send()))
+
+        sheet = ft.AlertDialog(
+            modal=True, bgcolor=theme.SURFACE,
+            title=ft.Text(cmd.get("title", "Текст"), color=theme.TEXT),
+            content=ft.Container(content=field, width=400),
+            actions=[ft.TextButton("Скасувати",
+                                   on_click=lambda _: theme.dismiss(ctx.page)), *btns],
+        )
+        theme.show(ctx.page, sheet)
+
+    return grid_tile(cmd, open_input, busy_ref=busy, on_long_press=ctx.on_edit,
+                     columns=cmd.get("_columns", 4))
+
+
+# ---------------------------------------------------------------- form
+def build_form_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
+    """Кілька полів одним екраном → один запит. Найуніверсальніший віджет:
+    fields=[{name,label,kind:text|number|bool|select,default,options}]."""
+    busy: dict = {}
+    p = cmd.get("params", {})
+    fields = p.get("fields", [])
+
+    def open_form():
+        controls = []
+        getters = {}  # name -> callable, що повертає значення
+        for f in fields:
+            name = f.get("name")
+            kind = f.get("kind", "text")
+            label = f.get("label", name)
+            if kind == "bool":
+                sw = ft.Switch(label=label, value=bool(f.get("default", False)),
+                               active_color=theme.ACCENT)
+                controls.append(sw)
+                getters[name] = lambda s=sw: "1" if s.value else "0"
+            elif kind == "select":
+                opts = f.get("options", [])
+                dd = ft.Dropdown(
+                    label=label, value=str(f.get("default", "")),
+                    options=[ft.dropdown.Option(key=str(o["value"]),
+                                                text=o.get("label", str(o["value"])))
+                             for o in opts], color=theme.TEXT)
+                controls.append(dd)
+                getters[name] = lambda d=dd: d.value
+            else:
+                tf = ft.TextField(
+                    label=label, value=str(f.get("default", "")), color=theme.TEXT,
+                    keyboard_type=ft.KeyboardType.NUMBER if kind == "number"
+                    else ft.KeyboardType.TEXT)
+                controls.append(tf)
+                getters[name] = lambda t=tf: t.value
+
+        def submit(_):
+            theme.dismiss(ctx.page)
+            params = {n: g() for n, g in getters.items()}
+            _run_with_confirm(cmd, ctx, busy, params)
+
+        sheet = ft.AlertDialog(
+            modal=True, bgcolor=theme.SURFACE,
+            title=ft.Text(cmd.get("title", "Форма"), color=theme.TEXT),
+            content=ft.Container(
+                content=ft.Column(controls, tight=True, spacing=12,
+                                  scroll=ft.ScrollMode.AUTO), width=400),
+            actions=[ft.TextButton("Скасувати",
+                                   on_click=lambda _: theme.dismiss(ctx.page)),
+                     ft.FilledButton("Виконати", on_click=submit)],
+        )
+        theme.show(ctx.page, sheet)
+
+    return grid_tile(cmd, open_form, busy_ref=busy, on_long_press=ctx.on_edit,
+                     columns=cmd.get("_columns", 4))
 
 
 # ---------------------------------------------------------------- audio

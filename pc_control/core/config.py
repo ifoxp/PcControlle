@@ -131,6 +131,10 @@ class ApiConfig:
     # Rate-limit: макс. запитів з однієї IP за вікно
     rate_limit_max: int = 60
     rate_limit_window_sec: int = 10
+    # Окремий ліміт для «потокових» ендпоінтів (тачпад /mouse, монітор, стрім):
+    # телефон легально шле ~18 рухів/сек, тож звичайні 60/10с рубали б рух.
+    rate_limit_fast_max: int = 600
+    rate_limit_fast_window_sec: int = 10
 
     # HTTPS: якщо True — сервер підіймається на TLS (self-signed cert).
     # Керується перемикачем у config.json ("use_tls"); за замовчуванням True для

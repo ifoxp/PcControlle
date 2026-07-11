@@ -31,12 +31,14 @@
 from __future__ import annotations
 
 # Версія маніфесту: телефон порівнює й перемальовує сітку, коли змінилась.
-MANIFEST_VERSION = 5
+MANIFEST_VERSION = 6
 
 # Дозволені типи віджетів (для валідації й документації)
 WIDGETS = {"button", "toggle", "slider", "media_view", "audio", "text_input",
            "picker", "url_clipboard", "push_clipboard", "process_list",
-           "power_menu", "touchpad", "monitor", "screen_stream"}
+           "power_menu", "touchpad", "monitor", "screen_stream",
+           # бібліотека можливостей (додані один раз, керуються з сервера):
+           "file_browser", "form", "long_text", "log_view"}
 
 
 # Порядок = порядок появи в сітці на телефоні.
@@ -152,6 +154,38 @@ COMMANDS: list[dict] = [
         "dangerous": False, "response": "text", "group": "Екран",
         "params": {"name": "level", "min": 0, "max": 100, "step": 5,
                    "getter": {"path": "/brightness_get", "response": "number"}},
+    },
+
+    # --- Файли ---
+    {
+        "id": "files", "title": "Файли ПК", "icon": "folder",
+        "widget": "file_browser", "method": "GET", "path": "/fs/list",
+        "dangerous": False, "response": "json", "group": "Файли",
+        "params": {"root": "downloads", "download_path": "/fs/download",
+                   "roots_path": "/fs/roots"},
+    },
+    # file_upload прибрано: ft.FilePicker не працює в цій збірці Flet на Android
+    # (помилка "Known control FilePicker"). Повернемо у фазі 2 з нативним обходом.
+
+    # --- Текст / нотатки ---
+    {
+        "id": "type_text", "title": "Текст на ПК", "icon": "keyboard_alt",
+        "widget": "long_text", "method": "POST", "path": "/type_text",
+        "dangerous": False, "response": "text", "group": "Буфер",
+        "params": {"name": "text",
+                   "actions": [{"value": "clipboard", "label": "У буфер ПК"},
+                               {"value": "paste", "label": "Вставити (Ctrl+V)"}]},
+    },
+
+    # --- Діагностика ---
+    {
+        "id": "logs", "title": "Логи ПК", "icon": "article",
+        "widget": "log_view", "method": "GET", "path": "/logs/tail",
+        "dangerous": False, "response": "json", "group": "Керування",
+        "params": {"sources": [{"value": "api", "label": "Застосунок"},
+                               {"value": "security", "label": "Безпека"},
+                               {"value": "sorter", "label": "Сортувальник"}],
+                   "lines": 200, "refresh_sec": 3},
     },
 
     # --- ЗАГОТОВКИ під майбутнє (телефон уже вміє ці віджети) ---

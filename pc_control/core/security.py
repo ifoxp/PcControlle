@@ -38,7 +38,8 @@ from .status import EV_PHONE_REQUEST, REGISTRY
 logger = get_logger("security")
 
 # --- Стан у пам'яті (скидається при рестарті — це ок для бан/rate/replay) ---
-_hits: dict[str, deque] = defaultdict(deque)        # IP -> таймстемпи запитів
+_hits: dict[str, deque] = defaultdict(deque)        # IP -> таймстемпи запитів (звичайні)
+_hits_fast: dict[str, deque] = defaultdict(deque)   # IP -> таймстемпи «потокових» запитів (/mouse тощо)
 _fails: dict[str, deque] = defaultdict(deque)       # IP -> таймстемпи невдач авторизації
 _bans: dict[str, float] = {}                        # IP -> monotonic час, до якого забанено
 _ban_strikes: dict[str, int] = defaultdict(int)     # IP -> скільки разів уже банили (ескалація)
@@ -57,11 +58,22 @@ def client_ip() -> str:
 
 # ---------------------------------------------------------------- rate-limit
 
-def _rate_limited(ip: str) -> bool:
-    window = CONFIG.api.rate_limit_window_sec
-    limit = CONFIG.api.rate_limit_max
+def _rate_limited(ip: str, high_rate: bool = False) -> bool:
+    """Per-IP rate-limit ковзним вікном.
+
+    high_rate=True — для «потокових» ендпоінтів (тачпад /mouse, монітор, стрім),
+    де телефон легально шле десятки запитів/сек. Для них окремий, набагато вищий
+    ліміт (інакше звичайні 60/10с рубали рухи миші → ривки й лаг тачпада).
+    """
+    if high_rate:
+        window = CONFIG.api.rate_limit_fast_window_sec
+        limit = CONFIG.api.rate_limit_fast_max
+        q = _hits_fast[ip]
+    else:
+        window = CONFIG.api.rate_limit_window_sec
+        limit = CONFIG.api.rate_limit_max
+        q = _hits[ip]
     now = time.monotonic()
-    q = _hits[ip]
     while q and now - q[0] > window:
         q.popleft()
     if len(q) >= limit:
@@ -160,11 +172,15 @@ def _extract_token() -> str:
     return request.args.get("token", "").strip()
 
 
-def require_device(view=None, *, dangerous: bool = False):
+def require_device(view=None, *, dangerous: bool = False, high_rate: bool = False):
     """
     Декоратор захищеного ендпоінта. Використання:
         @require_device
         @require_device(dangerous=True)
+        @require_device(high_rate=True)   # потокові: /mouse, /monitor, /stream
+
+    high_rate=True — ендпоінт легально викликається десятки разів/сек (тачпад),
+    тож для нього діє окремий, вищий rate-ліміт.
     """
     def decorator(fn):
         @wraps(fn)
@@ -175,7 +191,7 @@ def require_device(view=None, *, dangerous: bool = False):
                 audit.audit(audit.AUTH_FAIL, ip=ip, path=request.path, reason="banned")
                 abort(403)
 
-            if _rate_limited(ip):
+            if _rate_limited(ip, high_rate=high_rate):
                 audit.audit(audit.RATE_LIMIT, ip=ip, path=request.path)
                 logger.warning("Rate limit від %s на %s", ip, request.path)
                 abort(429)
