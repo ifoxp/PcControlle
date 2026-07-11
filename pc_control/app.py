@@ -116,6 +116,11 @@ def main() -> int:
     paths.ensure_dirs()
     log = get_logger("app")
     log.info("=== PC Control запускається ===")
+    try:
+        from .core import autostart
+        log.info("Права адміністратора: %s", "ТАК" if autostart.is_admin() else "НІ")
+    except Exception:
+        pass
 
     # реєструємо сервіси заздалегідь, щоб картки показувались одразу як "stopped"
     REGISTRY.register(SVC_SORTER, "Сортувальник фото/відео")

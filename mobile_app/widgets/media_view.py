@@ -146,8 +146,8 @@ def present_bytes(ctx: WidgetContext, data: bytes, *, kind: str, title: str) -> 
 
     def close(_=None):
         try:
-            if hasattr(page, "_pop_view"):
-                page._pop_view()
+            if hasattr(page, "_pop_screen"):
+                page._pop_screen()
             elif overlay in page.overlay:
                 page.overlay.remove(overlay)
                 page.update()
@@ -186,10 +186,9 @@ def present_bytes(ctx: WidgetContext, data: bytes, *, kind: str, title: str) -> 
         padding=ft.Padding(left=8, top=0, right=8, bottom=8),
         content=ft.Column([top_bar_wrap, body], spacing=6, expand=True),
     )
-    if hasattr(page, "_push_view"):
+    if hasattr(page, "_push_screen"):
         # окремий View — системний «назад» повертає на сітку, не вбиває додаток
-        page._push_view(overlay, appbar_title="", on_pop=lambda: None)
-        page.update()
+        page._push_screen(overlay, title="", on_pop=lambda: None)
         return
     page.overlay.append(overlay)
     if hasattr(page, "_back_stack"):

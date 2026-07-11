@@ -24,54 +24,25 @@ from widgets.base import WidgetContext, grid_tile
 
 
 def _open_view(ctx: WidgetContext, title: str, build_body, on_close=lambda: None):
-    """Повноекранний overlay (працює надійно — на відміну від page.views).
-    Закриття: AppBar-стрілка АБО свайп зліва-направо (жест «назад» власною
-    реалізацією, бо системний back на Flet-Android не ловиться)."""
+    """Повноекранний екран через page._push_screen (окремий View з AppBar).
+    Системний «назад» / стрілка AppBar знімають його — не закриваючи додаток."""
     page = ctx.page
-    holder = {}
 
     def close(_=None):
         try:
-            if holder.get("ov") in page.overlay:
-                page.overlay.remove(holder["ov"])
-            if hasattr(page, "_back_stack") and close in page._back_stack:
-                page._back_stack.remove(close)
-            on_close()
-            page.update()
+            if hasattr(page, "_pop_screen"):
+                page._pop_screen()
         except Exception:
             pass
 
-    top = ft.Row([
-        ft.IconButton(ft.Icons.ARROW_BACK, icon_color=theme.TEXT, icon_size=26,
-                      on_click=close),
-        ft.Text(title, color=theme.TEXT, size=17, weight=ft.FontWeight.BOLD, expand=True),
-    ])
-    inner = ft.Column([top, build_body(close)], expand=True, spacing=8)
-
-    # свайп зліва-направо по всьому екрану → закрити (жест «назад»)
-    def on_pan_end(e):
-        pass
-
-    def on_h_drag(e):
-        # горизонтальний свайп вправо на достатню відстань → назад
-        d = getattr(e, "primary_delta", None) or 0
-        holder["dx"] = holder.get("dx", 0) + d
-        if holder["dx"] > 90:
-            holder["dx"] = 0
-            close()
-
-    ov = ft.GestureDetector(
-        on_horizontal_drag_update=on_h_drag,
-        on_horizontal_drag_start=lambda e: holder.update(dx=0),
-        content=ft.Container(bgcolor=theme.BG, expand=True,
-                             padding=ft.Padding(12, 40, 12, 12), content=inner),
-        expand=True,
-    )
-    holder["ov"] = ov
-    page.overlay.append(ov)
-    if hasattr(page, "_back_stack"):
-        page._back_stack.append(close)
-    page.update()
+    body = ft.Container(bgcolor=theme.BG, expand=True,
+                        padding=ft.Padding(12, 8, 12, 12),
+                        content=build_body(close))
+    if hasattr(page, "_push_screen"):
+        page._push_screen(body, title=title, on_pop=on_close)
+    else:  # fallback
+        page.views.append(ft.View(controls=[body]))
+        page.update()
     return close
 
 
@@ -89,14 +60,28 @@ def build_touchpad_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
 
     def open_pad():
         sens = {"v": 2.2}
+        # НАКОПИЧЕННЯ дельти: кожен рух пальця НЕ шле окремий HTTP (через тунель це
+        # 30-50мс → «лютий тротлінг»). Замість цього сумуємо дельту й шлемо ОДИН
+        # запит раз на ~55мс сумарним зсувом — плавно й без лагу.
+        acc = {"dx": 0.0, "dy": 0.0, "t": 0.0}
+
+        def _flush():
+            import time as _t
+            now = _t.monotonic()
+            if now - acc["t"] < 0.055:
+                return
+            dx, dy = int(acc["dx"]), int(acc["dy"])
+            if dx or dy:
+                acc["dx"] -= dx
+                acc["dy"] -= dy
+                acc["t"] = now
+                send({"action": "move", "dx": dx, "dy": dy})
 
         def on_pan(e):
-            # Flet 0.85: дельта у e.local_delta (Offset), НЕ e.delta_x/delta_y!
             d = getattr(e, "local_delta", None)
-            dx = int((getattr(d, "x", 0) or 0) * sens["v"])
-            dy = int((getattr(d, "y", 0) or 0) * sens["v"])
-            if dx or dy:
-                send({"action": "move", "dx": dx, "dy": dy})
+            acc["dx"] += (getattr(d, "x", 0) or 0) * sens["v"]
+            acc["dy"] += (getattr(d, "y", 0) or 0) * sens["v"]
+            _flush()
 
         def on_scroll(e):
             d = getattr(e, "local_delta", None)
@@ -104,17 +89,18 @@ def build_touchpad_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
             send({"action": "scroll", "dy": 1 if dy < 0 else -1})
 
         def body(close):
+            # ТІЛЬКИ pan (рух). on_tap/on_double_tap ПРИБРАНО: вони змушували Flet
+            # чекати «чи це тап» перед pan → повільний рух не трекався. Кліки —
+            # окремими кнопками ЛКМ/ПКМ знизу. drag_interval=0 → максимальна плавність.
             pad = ft.GestureDetector(
                 on_pan_update=on_pan,
-                drag_interval=16,
-                on_tap=lambda _: send({"action": "click", "button": "left"}),
-                on_double_tap=lambda _: send({"action": "click", "button": "left", "count": 2}),
+                drag_interval=0,
                 content=ft.Container(
                     bgcolor=theme.SURFACE, border_radius=16, expand=True,
                     border=theme.border_all(1, theme.BORDER),
                     content=ft.Column([
                         ft.Icon(ft.Icons.TOUCH_APP, size=40, color=theme.TEXT_DIM),
-                        ft.Text("Веди пальцем — курсор\nтап — клік · подвійний тап — 2 кліки",
+                        ft.Text("Веди пальцем — курсор\nкнопки знизу — кліки",
                                 color=theme.TEXT_DIM, size=13,
                                 text_align=ft.TextAlign.CENTER),
                     ], alignment=ft.MainAxisAlignment.CENTER,
@@ -162,7 +148,7 @@ def build_monitor_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
         grid = ft.Column(spacing=8, scroll=ft.ScrollMode.AUTO, expand=True)
         win_lbl = ft.Text("", color=theme.ACCENT, size=13, weight=ft.FontWeight.BOLD)
         dur_lbl = ft.Text("", color=theme.TEXT_DIM, size=12)
-        cores_wrap = ft.Row(wrap=True, spacing=6, run_spacing=6)
+        cores_wrap = ft.Column(spacing=6)  # рядки ядер (симетрично по N у ряд)
 
         def _load_color(v):
             if v is None:
@@ -271,15 +257,35 @@ def build_monitor_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
             win_lbl.value = "▶ " + (data.get("active_window") or "—")
             dur_lbl.value = (f"сесія {data.get('duration_sec', 0)} с · "
                              + ("● запис" if data.get("running") else "стоп"))
-            # CPU: велика плитка + ядра прямокутниками
+            # CPU: велика плитка + ядра. Групуємо потоки по 2 в одне ядро.
             cores = data.get("cores", [])
-            # групуємо потоки по 2 в одне фізичне ядро (16 потоків → 8 ядер)
-            cores_wrap.controls = [
+            core_boxes = [
                 _core_box(cores[i], cores[i + 1] if i + 1 < len(cores) else None)
                 for i in range(0, len(cores), 2)
             ]
-            n_cores = (len(cores) + 1) // 2
+            n_cores = len(core_boxes)
+            # СИМЕТРИЧНЕ розкладання: підбираємо к-ть колонок, щоб рядки були рівні
+            # (8 ядер → 4+4, 6 → 3+3, 4 → 4). Обмежуємо 4 в ряд (щоб влазило).
+            per_row = n_cores
+            for cols in (4, 3, 2):
+                if n_cores % cols == 0:
+                    per_row = cols
+                    break
+            else:
+                per_row = min(4, n_cores)
+            rows = [ft.Row(core_boxes[i:i + per_row], spacing=6,
+                           alignment=ft.MainAxisAlignment.CENTER)
+                    for i in range(0, n_cores, per_row)]
+            cores_wrap.controls = rows
+            cpu_power = (m.get("cpu_power") or {}).get("last")
+            cpu_name = data.get("cpu_name", "")
             cpu_extra = ft.Column([
+                ft.Row([
+                    ft.Text(cpu_name, color=theme.TEXT_DIM, size=11, expand=True,
+                            max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                    ft.Text(f"{cpu_power} Вт" if cpu_power is not None else "",
+                            color=theme.OK, size=13, weight=ft.FontWeight.BOLD),
+                ]),
                 ft.Text(f"Ядра ({n_cores} × 2 потоки)", color=theme.TEXT_DIM, size=11),
                 cores_wrap], spacing=4)
             # GPU: назва + вати
@@ -310,43 +316,35 @@ def build_monitor_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
             except Exception:
                 pass
 
-        tick = {"n": 0}
-
-        async def _loop():
-            # asyncio-цикл через run_task. Діагностика: показуємо стан у dur_lbl,
-            # щоб бачити, чи цикл живий і де падає (замість тихого except).
-            try:
-                await asyncio.to_thread(ctx.client.get_text, f"{base}/start")
-            except Exception as e:
-                dur_lbl.value = f"start помилка: {str(e)[:60]}"
-                try: ctx.page.update()
-                except Exception: pass
-                return
-            while state["running"]:
+        # Оновлення — ПО КНОПЦІ (надійно: той самий механізм, що й інші кнопки;
+        # авто-цикл на Flet-Android був нестабільний). Кожен тап «Оновити» = один
+        # запит /data. «Записувати» вмикає накопичення статистики для звіту.
+        def refresh(_=None):
+            def work():
                 try:
-                    data = await asyncio.to_thread(ctx.client.get_json, f"{base}/data")
-                    tick["n"] += 1
+                    data = ctx.client.get_json(f"{base}/data")
                     render(data)
                 except Exception as e:
-                    dur_lbl.value = f"тік {tick['n']} помилка: {str(e)[:70]}"
+                    win_lbl.value = f"Помилка: {str(e)[:60]}"
+                    win_lbl.color = theme.DANGER
                     try: ctx.page.update()
                     except Exception: pass
-                await asyncio.sleep(1.0)
+            ctx.run_async(work)
 
         def _do(word):
             def work():
                 try:
                     ctx.client.get_text(f"{base}/{word}")
+                    refresh()
                 except Exception:
                     pass
             ctx.run_async(work)
 
         def body(close):
-            def start(_):
-                if state["running"]:
-                    return
+            def start_rec(_):
                 state["running"] = True
-                ctx.page.run_task(_loop)
+                _do("start")
+                ctx.toast("Запис почато — потім тисни «Завершити» для звіту")
 
             def reset(_):
                 _do("reset")
@@ -362,19 +360,25 @@ def build_monitor_tile(cmd: dict, ctx: WidgetContext) -> ft.Control:
                         ctx.toast(str(e), error=True)
                 ctx.run_async(work)
 
-            btns = ft.Row([
-                ft.FilledButton("Старт", icon=ft.Icons.PLAY_ARROW, on_click=start, expand=True),
-                ft.OutlinedButton("Скинути", icon=ft.Icons.RESTART_ALT, on_click=reset, expand=True),
-                ft.FilledButton("Завершити", icon=ft.Icons.STOP, on_click=finish, expand=True),
+            refresh_btn = ft.FilledButton(
+                "Оновити", icon=ft.Icons.REFRESH, on_click=refresh,
+                height=52, width=10000)
+            rec_btns = ft.Row([
+                ft.OutlinedButton("Записувати", icon=ft.Icons.FIBER_MANUAL_RECORD,
+                                  on_click=start_rec, expand=True),
+                ft.OutlinedButton("Скинути", icon=ft.Icons.RESTART_ALT,
+                                  on_click=reset, expand=True),
+                ft.FilledButton("Завершити", icon=ft.Icons.STOP,
+                                on_click=finish, expand=True),
             ], spacing=8)
             return ft.Column([win_lbl, dur_lbl, ft.Divider(color=theme.BORDER),
-                              grid, btns], expand=True, spacing=8)
+                              grid, refresh_btn, rec_btns], expand=True, spacing=8)
 
         _open_view(ctx, "Моніторинг ПК", body,
                    on_close=lambda: (state.update(running=False), _do("stop")))
-        # автостарт через asyncio-таск
+        # старт запису + перший показ даних одразу при відкритті
         state["running"] = True
-        ctx.page.run_task(_loop)
+        _do("start")
 
     return grid_tile(cmd, open_monitor, on_long_press=ctx.on_edit,
                      columns=cmd.get("_columns", 4))
@@ -385,31 +389,52 @@ def _show_stats(ctx: WidgetContext, data: dict):
     dur = data.get("duration_sec", 0)
     mm, ss = divmod(dur, 60)
     dur_str = f"{mm} хв {ss} с" if mm else f"{ss} с"
-    lines = [f"📊 Сесія моніторингу · {dur_str}", ""]
 
-    def line(label, key, unit="%", show_min=False):
-        a = m.get(key, {})
-        if a.get("avg") is None:
-            return
-        s = f"{label}: сер {a['avg']}{unit} · макс {a['max']}{unit}"
-        if show_min:
-            s += f" · мін {a['min']}{unit}"
-        lines.append(s)
+    def avg(key):
+        return (m.get(key) or {}).get("avg")
 
-    # корисне геймеру: навантаження (сер+макс), температури (сер+макс, важливий пік)
-    line("CPU навантаження", "cpu")
-    line("GPU навантаження", "gpu")
-    if (m.get("cpu_temp") or {}).get("avg") is not None:
-        line("CPU температура", "cpu_temp", "°")
-    if (m.get("gpu_temp") or {}).get("avg") is not None:
-        line("GPU температура", "gpu_temp", "°")
-    # памʼять — лише пік (min/сер не цікаві геймеру)
-    ram = m.get("ram", {})
-    if ram.get("max") is not None:
-        lines.append(f"RAM пік: {ram['max']}%")
-    vram = m.get("gpu_mem", {})
-    if vram.get("max") is not None:
-        lines.append(f"Відеопам'ять пік: {vram['max']}%")
+    lines = [f"Звіт моніторингу ПК (сесія: {dur_str})", ""]
+
+    # CPU: назва + навантаження + темп + вати (в один рядок, як у зразку)
+    cpu_parts = []
+    if avg("cpu") is not None:
+        cpu_parts.append(f"навантаження — {avg('cpu'):.0f}%")
+    if avg("cpu_temp") is not None:
+        cpu_parts.append(f"температура — {avg('cpu_temp'):.0f}°C")
+    if avg("cpu_power") is not None:
+        cpu_parts.append(f"енергоспоживання — {avg('cpu_power'):.0f} Вт")
+    if cpu_parts:
+        name = data.get("cpu_name", "")
+        lines.append(f"CPU{f' ({name})' if name else ''}: " + " | ".join(cpu_parts))
+
+    # GPU
+    gpu_parts = []
+    if avg("gpu") is not None:
+        gpu_parts.append(f"навантаження — {avg('gpu'):.0f}%")
+    if avg("gpu_temp") is not None:
+        gpu_parts.append(f"температура — {avg('gpu_temp'):.0f}°C")
+    if avg("gpu_power") is not None:
+        gpu_parts.append(f"енергоспоживання — {avg('gpu_power'):.0f} Вт")
+    if gpu_parts:
+        name = data.get("gpu_name", "")
+        lines.append(f"GPU{f' ({name})' if name else ''}: " + " | ".join(gpu_parts))
+
+    # RAM / VRAM з ГБ
+    if avg("ram") is not None:
+        ru, rt = data.get("ram_used_gb"), data.get("ram_total_gb")
+        gb = f" ({ru} / {rt} ГБ)" if ru is not None else ""
+        lines.append(f"RAM: використання — {avg('ram'):.0f}%{gb}")
+    if avg("gpu_mem") is not None:
+        vu, vt = data.get("vram_used_gb"), data.get("vram_total_gb")
+        gb = f" ({vu} / {vt} ГБ)" if vu is not None else ""
+        lines.append(f"VRAM: використання — {avg('gpu_mem'):.0f}%{gb}")
+
+    # диски в один рядок
+    disks = data.get("disks", [])
+    if disks:
+        parts = [f"{d['letter']} {d['pct']:.0f}%" for d in disks]
+        lines.append("Дисковий простір: " + " | ".join(parts))
+
     text = "\n".join(lines)
 
     async def copy():

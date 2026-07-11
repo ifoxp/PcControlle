@@ -29,6 +29,19 @@ logger = get_logger("monitoring")
 INTERVAL = 1.0  # секунда між тіками (достатньо, майже не навантажує)
 
 
+def _cpu_name() -> str:
+    """Назва процесора з реєстру Windows (без адмін-прав)."""
+    try:
+        import winreg
+        k = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                           r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
+        name = winreg.QueryValueEx(k, "ProcessorNameString")[0]
+        winreg.CloseKey(k)
+        return name.strip()
+    except Exception:
+        return ""
+
+
 class _Agg:
     """Накопичувач avg/min/max для однієї метрики."""
     __slots__ = ("sum", "n", "min", "max", "last")
@@ -68,7 +81,7 @@ class _Monitor:
             "cpu": _Agg(), "ram": _Agg(),
             "gpu": _Agg(), "gpu_mem": _Agg(),
             "cpu_temp": _Agg(), "gpu_temp": _Agg(),
-            "gpu_power": _Agg(),
+            "gpu_power": _Agg(), "cpu_power": _Agg(),
         }
         self.cores_last = []        # % по ядрах (останній замір)
         self.active_window = ""
@@ -77,6 +90,7 @@ class _Monitor:
         self.ram_used_gb = self.ram_total_gb = None
         self.vram_used_gb = self.vram_total_gb = None
         self.gpu_name = ""
+        self.cpu_name = _cpu_name()
         self.disks = []
 
     # ---------------- метрики ----------------
@@ -133,20 +147,28 @@ class _Monitor:
         if self._lhm is None:
             return None, None
         try:
-            from LibreHardwareMonitor.Hardware import HardwareType, SensorType
-            cpu_t = gpu_t = None
+            from LibreHardwareMonitor.Hardware import SensorType
+            res = {"cpu_t": None, "gpu_t": None, "cpu_power": None}
             for hw in self._lhm.Hardware:
                 hw.Update()
+                is_cpu = "Cpu" in str(hw.HardwareType)
+                is_gpu = "Gpu" in str(hw.HardwareType)
                 for s in hw.Sensors:
-                    if s.SensorType == SensorType.Temperature and s.Value is not None:
-                        name = str(hw.HardwareType)
-                        if "Cpu" in name and cpu_t is None:
-                            cpu_t = round(float(s.Value), 1)
-                        elif "Gpu" in name and gpu_t is None:
-                            gpu_t = round(float(s.Value), 1)
-            return cpu_t, gpu_t
+                    if s.Value is None:
+                        continue
+                    sn = (s.Name or "")
+                    if s.SensorType == SensorType.Temperature:
+                        # для CPU беремо "Package"/"Tctl" (загальна), інакше перший
+                        if is_cpu and (res["cpu_t"] is None or "Package" in sn or "Tctl" in sn):
+                            res["cpu_t"] = round(float(s.Value), 1)
+                        elif is_gpu and res["gpu_t"] is None:
+                            res["gpu_t"] = round(float(s.Value), 1)
+                    elif s.SensorType == SensorType.Power and is_cpu:
+                        if "Package" in sn or res["cpu_power"] is None:
+                            res["cpu_power"] = round(float(s.Value))
+            return res
         except Exception:
-            return None, None
+            return {"cpu_t": None, "gpu_t": None, "cpu_power": None}
 
     def _active_window_title(self):
         try:
@@ -162,8 +184,10 @@ class _Monitor:
         vm = psutil.virtual_memory()
         ram = vm.percent
         g = self._read_gpu()
-        cpu_temp, gpu_temp_lhm = self._read_temps_lhm()
-        gpu_temp = gpu_temp_lhm if gpu_temp_lhm is not None else g.get("temp")
+        lhm = self._read_temps_lhm()
+        cpu_temp = lhm.get("cpu_t")
+        cpu_power = lhm.get("cpu_power")
+        gpu_temp = lhm.get("gpu_t") if lhm.get("gpu_t") is not None else g.get("temp")
 
         with self._lock:
             self.metrics["cpu"].add(cpu)
@@ -174,6 +198,8 @@ class _Monitor:
                 self.metrics["gpu_mem"].add(g["mem_pct"])
             if cpu_temp is not None:
                 self.metrics["cpu_temp"].add(cpu_temp)
+            if cpu_power is not None:
+                self.metrics["cpu_power"].add(cpu_power)
             if gpu_temp is not None:
                 self.metrics["gpu_temp"].add(gpu_temp)
             if g.get("power") is not None:
@@ -257,6 +283,7 @@ class _Monitor:
                 "vram_used_gb": self.vram_used_gb,
                 "vram_total_gb": self.vram_total_gb,
                 "gpu_name": self.gpu_name,
+                "cpu_name": self.cpu_name,
                 "disks": self.disks,
             }
 

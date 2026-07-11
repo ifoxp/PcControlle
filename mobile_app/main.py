@@ -23,23 +23,20 @@ import flet as ft
 def _error_view(page: "ft.Page", where: str, exc: str) -> None:
     """Показати помилку на екрані (замість німого сірого/Working)."""
     try:
-        page.controls.clear()
-        page.add(
-            ft.Container(
-                bgcolor="#0f1116",
-                padding=20,
-                expand=True,
-                content=ft.Column(
-                    [
-                        ft.Text("⚠ Помилка запуску", size=20, color="#ff6b6b",
-                                weight=ft.FontWeight.BOLD),
-                        ft.Text(where, size=13, color="#ffd166"),
-                        ft.Text(exc, size=11, color="#c9d1d9", selectable=True),
-                    ],
-                    scroll=ft.ScrollMode.AUTO, spacing=10, expand=True,
-                ),
-            )
+        body = ft.Container(
+            bgcolor="#0f1116", padding=20, expand=True,
+            content=ft.Column(
+                [
+                    ft.Text("⚠ Помилка запуску", size=20, color="#ff6b6b",
+                            weight=ft.FontWeight.BOLD),
+                    ft.Text(where, size=13, color="#ffd166"),
+                    ft.Text(exc, size=11, color="#c9d1d9", selectable=True),
+                ],
+                scroll=ft.ScrollMode.AUTO, spacing=10, expand=True,
+            ),
         )
+        page.views.clear()
+        page.views.append(ft.View(controls=[body], padding=0, bgcolor="#0f1116"))
         page.update()
     except Exception:
         pass
@@ -53,29 +50,60 @@ def main(page: "ft.Page"):
     except Exception:
         pass
 
-    # back-стек для повноекранних overlay (мишка/монітор/стрім/скрін). Overlay
-    # закриваються своєю стрілкою «назад» + свайпом зліва-направо (власний жест,
-    # бо системний back на Flet-Android не доставляється надійно). Цей стек ловить
-    # системний back ЯКЩО він таки прийде (не завадить).
-    page._back_stack = []
+    # НАВІГАЦІЯ через page.views — ЄДИНИЙ спосіб ловити системний «назад» на
+    # Flet-Android (діагностовано ADB: без views Android setTopOnBackInvokedCallback=null
+    # і back одразу закриває MainActivity). views[0] — основний екран; повноекранні
+    # (мишка/монітор/стрім/скрін) додаються як views[1+]; системний back знімає верхній.
+    page._on_pop_cbs = {}   # id(view) -> callback при знятті
 
-    def _handle_back() -> bool:
-        if page._back_stack:
-            cb = page._back_stack.pop()
-            try:
-                cb()
-            except Exception:
-                pass
+    def push_screen(content, title="", on_pop=None):
+        """Додає повноекранний View. Системний «назад» його зніме."""
+        v = ft.View(controls=[content], padding=0, bgcolor="#0f1116",
+                    appbar=ft.AppBar(
+                        title=ft.Text(title, size=16, color="#e8e8ea"),
+                        bgcolor="#171a21",
+                        leading=ft.IconButton(ft.Icons.ARROW_BACK, icon_color="#e8e8ea",
+                                              on_click=lambda _: pop_screen()),
+                    ) if title else None)
+        if on_pop:
+            page._on_pop_cbs[id(v)] = on_pop
+        page.views.append(v)
+        page.update()
+        return v
+
+    def pop_screen():
+        if len(page.views) > 1:
+            v = page.views.pop()
+            cb = page._on_pop_cbs.pop(id(v), None)
+            if cb:
+                try:
+                    cb()
+                except Exception:
+                    pass
+            # Якщо повернулись до кореня — ПЕРЕБУДОВУЄМО головний екран заново.
+            # Без цього root-view показувався ПОРОЖНІМ (темно-синій фон): Flet губив
+            # прив'язку _MainShell при знятті верхнього view.
+            if len(page.views) == 1 and getattr(page, "_rebuild_home", None):
+                try:
+                    page._rebuild_home()
+                    return True
+                except Exception:
+                    pass
+            page.update()
             return True
         return False
 
+    page._push_screen = push_screen
+    page._pop_screen = pop_screen
+
     def _on_view_pop(e):
-        _handle_back()
+        # системний «назад» / кнопка AppBar
+        pop_screen()
 
     def _on_keyboard(e):
         key = (getattr(e, "key", "") or "").lower()
         if key in ("escape", "browser back", "go back", "back"):
-            _handle_back()
+            pop_screen()
 
     try:
         page.on_view_pop = _on_view_pop
@@ -122,14 +150,16 @@ def main(page: "ft.Page"):
         return
 
     def show(control, with_nav=False):
-        # Основний екран у page.controls (надійно на Flet-Android). Повноекранні
-        # екрани (мишка/монітор/стрім/скрін) — через page.overlay поверх. Навігація
-        # (таби) — page.navigation_bar.
+        # Основний екран = КОРЕНЕВИЙ view (page.views[0]). Скидаємо стек views
+        # (закриваємо всі повноекранні) і ставимо новий корінь. Навігація (таби) —
+        # у navigation_bar самого View.
         try:
             nav = getattr(control, "_nav_bar", None) if with_nav else None
-            page.navigation_bar = nav
-            page.controls.clear()
-            page.controls.append(control)
+            page._on_pop_cbs.clear()
+            root = ft.View(controls=[control], padding=0, bgcolor="#0f1116",
+                           navigation_bar=nav)
+            page.views.clear()
+            page.views.append(root)
             page.update()
         except Exception:
             _error_view(page, "Рендер " + type(control).__name__, traceback.format_exc())
@@ -151,6 +181,9 @@ def main(page: "ft.Page"):
                 show(shell, with_nav=True)   # MainShell ставить page.navigation_bar
         except Exception:
             _error_view(page, "Головний екран", traceback.format_exc())
+
+    # для pop_screen: перебудувати головний екран при поверненні на корінь
+    page._rebuild_home = go_home
 
     # Парування — через буфер обміну: браузер-місток (сторінка /pair на ПК)
     # копіює код парування в буфер і відкриває застосунок через pccontrol://.
