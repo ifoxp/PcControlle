@@ -25,23 +25,71 @@ _CRASH_LOG_FILE = None
 
 
 def _start_services() -> None:
-    """Стартує всі фонові сервіси. Кожен ізольовано, щоб падіння одного не валило інші."""
+    """Стартує фонові сервіси. Кожен ізольовано, щоб падіння одного не валило інші.
+    Вимкнені у налаштуваннях функції (CONFIG.features) НЕ запускаються."""
     log = get_logger("app")
 
+    from .core.config import CONFIG
     from .services import auto_shutdown, cloudflared, sorter, volume_manager
     from .api import server as api_server
 
-    for name, starter in (
-        ("auto_shutdown", auto_shutdown.start_background),
-        ("volume_manager", volume_manager.start_background),
-        ("sorter", sorter.start_background),
-        ("api", api_server.start_background),
-        ("cloudflared", cloudflared.start_background),
+    # (назва, стартер, ключ функції — None = завжди запускати)
+    for name, starter, feature in (
+        ("auto_shutdown", auto_shutdown.start_background, "autoshutdown"),
+        ("volume_manager", volume_manager.start_background, "volume"),
+        ("sorter", sorter.start_background, "sorter"),
+        ("api", api_server.start_background, None),
+        ("cloudflared", cloudflared.start_background, None),
     ):
+        if feature is not None and not CONFIG.feature_enabled(feature):
+            log.info("Сервіс %s вимкнено користувачем — не запускаю.", name)
+            continue
         try:
             starter()
         except Exception as e:
             log.error("Сервіс %s не запустився: %s", name, e)
+
+    # авто-очищення старих скріншотів (не залежить від функцій — завжди)
+    try:
+        _start_screenshots_cleaner()
+    except Exception as e:
+        log.warning("Не вдалося запустити очищення скріншотів: %s", e)
+
+
+def _start_screenshots_cleaner() -> None:
+    """Раз на добу видаляє скріншоти старші за 1 день з SCREENSHOTS_DIR — вони вже
+    надіслані на телефон, зберігати нема сенсу. Демон-потік, тихо."""
+    import threading
+    import time
+    log = get_logger("app")
+
+    def _clean_once():
+        try:
+            now = time.time()
+            d = paths.SCREENSHOTS_DIR
+            if not d.exists():
+                return
+            removed = 0
+            for f in d.iterdir():
+                try:
+                    if f.is_file() and now - f.stat().st_mtime > 86400:
+                        f.unlink()
+                        removed += 1
+                except OSError:
+                    continue
+            if removed:
+                log.info("Очищено скріншотів (старші за добу): %d", removed)
+        except Exception as e:
+            log.warning("Помилка очищення скріншотів: %s", e)
+
+    def _loop():
+        while True:
+            _clean_once()
+            time.sleep(86400)  # раз на добу
+
+    _clean_once()  # одразу при старті
+    t = threading.Thread(target=_loop, name="screenshots_cleaner", daemon=True)
+    t.start()
 
 
 def _install_excepthook() -> None:
@@ -122,10 +170,15 @@ def main() -> int:
     except Exception:
         pass
 
-    # реєструємо сервіси заздалегідь, щоб картки показувались одразу як "stopped"
-    REGISTRY.register(SVC_SORTER, "Сортувальник фото/відео")
-    REGISTRY.register(SVC_VOLUME, "Керування гучністю")
-    REGISTRY.register(SVC_AUTOSHUTDOWN, "Авто-вимкнення")
+    # реєструємо сервіси заздалегідь, щоб картки показувались одразу як "stopped".
+    # Вимкнені функції НЕ реєструємо — тоді їх карток нема в Огляді.
+    from .core.config import CONFIG
+    if CONFIG.feature_enabled("sorter"):
+        REGISTRY.register(SVC_SORTER, "Сортувальник фото/відео")
+    if CONFIG.feature_enabled("volume"):
+        REGISTRY.register(SVC_VOLUME, "Керування гучністю")
+    if CONFIG.feature_enabled("autoshutdown"):
+        REGISTRY.register(SVC_AUTOSHUTDOWN, "Авто-вимкнення")
     REGISTRY.register(SVC_API, "Веб-сервер (API)")
 
     from .ui.tray import run_app

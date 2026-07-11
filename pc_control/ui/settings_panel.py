@@ -333,6 +333,12 @@ class SettingsPanel(QWidget):
         root.setContentsMargins(4, 6, 4, 6)
         root.setSpacing(16)
 
+        # Поля сортувальника СТВОРЮЄМО завжди (щоб _save їх зберігав і налаштування
+        # НЕ зникали при вимкненні функції), але ПОКАЗУЄМО групи лише якщо функція
+        # увімкнена.
+        sorter_on = CONFIG.feature_enabled("sorter")
+        volume_on = CONFIG.feature_enabled("volume")
+
         # --- Папки ---
         g_paths = _Group("Папки сортувальника")
         self.f_camera = _Field("Папка фото (Camera)", str(s.camera_dir),
@@ -343,7 +349,8 @@ class SettingsPanel(QWidget):
                              "Куди копіюються цінні фото", browse=True)
         for f in (self.f_camera, self.f_trash, self.f_sync):
             g_paths.add(f)
-        root.addWidget(g_paths)
+        if sorter_on:
+            root.addWidget(g_paths)
 
         # --- Ollama ---
         g_ollama = _Group("Модель Ollama")
@@ -352,11 +359,13 @@ class SettingsPanel(QWidget):
         self.f_exe = _Field("Шлях до ollama.exe", s.ollama_exe, browse=False)
         for f in (self.f_model, self.f_url, self.f_exe):
             g_ollama.add(f)
-        root.addWidget(g_ollama)
+        if sorter_on:
+            root.addWidget(g_ollama)
 
         # --- Гучність застосунків ---
         self.g_volume = _VolumeOffsetsGroup()
-        root.addWidget(self.g_volume)
+        if volume_on:
+            root.addWidget(self.g_volume)
 
         # --- Мережа / безпека ---
         g_net = _Group("Мережа та безпека")

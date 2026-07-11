@@ -66,19 +66,24 @@ class TrayApp:
         act_open.triggered.connect(self.show_dashboard)
         menu.addAction(act_open)
 
-        act_tasks = QAction("Задачі", menu)
-        act_tasks.triggered.connect(self.show_tasks)
-        menu.addAction(act_tasks)
+        # «Задачі» — лише якщо функція увімкнена
+        if CONFIG.feature_enabled("tasks"):
+            act_tasks = QAction("Задачі", menu)
+            act_tasks.triggered.connect(self.show_tasks)
+            menu.addAction(act_tasks)
 
-        act_run = QAction("Запустити аналіз фото", menu)
-        act_run.triggered.connect(self._run_sorter)
-        menu.addAction(act_run)
+        # «Запустити аналіз фото» + «Папка фото» — лише якщо сортувальник увімкнено
+        if CONFIG.feature_enabled("sorter"):
+            act_run = QAction("Запустити аналіз фото", menu)
+            act_run.triggered.connect(self._run_sorter)
+            menu.addAction(act_run)
 
         menu.addSeparator()
 
-        act_camera = QAction("Папка фото (Camera)", menu)
-        act_camera.triggered.connect(lambda: _open_path(CONFIG.sorter.camera_dir))
-        menu.addAction(act_camera)
+        if CONFIG.feature_enabled("sorter"):
+            act_camera = QAction("Папка фото (Camera)", menu)
+            act_camera.triggered.connect(lambda: _open_path(CONFIG.sorter.camera_dir))
+            menu.addAction(act_camera)
 
         act_shots = QAction("Папка скріншотів", menu)
         act_shots.triggered.connect(lambda: _open_path(paths.SCREENSHOTS_DIR))
@@ -97,9 +102,13 @@ class TrayApp:
 
     # --------------------------------------------------------- handlers
     def _on_activated(self, reason) -> None:
-        # клік/подвійний клік по іконці трею відкриває вікно Задач
+        # клік/подвійний клік по іконці трею: якщо «Задачі» увімкнені — відкриваємо
+        # їх; якщо вимкнені — відкриваємо панель (налаштування/огляд).
         if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
-            self.show_tasks()
+            if CONFIG.feature_enabled("tasks"):
+                self.show_tasks()
+            else:
+                self.show_dashboard()
 
     def show_dashboard(self) -> None:
         try:
@@ -152,6 +161,15 @@ def run_app(start_services) -> int:
 
     if not QSystemTrayIcon.isSystemTrayAvailable():
         logger.warning("Системний трей недоступний — показую дашборд напряму.")
+
+    # Майстер першого запуску: питаємо, які функції потрібні (ДО реєстрації трею
+    # та старту сервісів). Показуємо лише якщо ще не налаштовано.
+    if not CONFIG.first_run_done:
+        try:
+            from .first_run import FirstRunDialog
+            FirstRunDialog().exec()
+        except Exception:
+            logger.error("Помилка майстра першого запуску", exc_info=True)
 
     tray = TrayApp(app)
 

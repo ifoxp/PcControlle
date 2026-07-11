@@ -180,12 +180,25 @@ class ApiConfig:
     signature_max_skew_sec: int = 30  # допустимий розбіг годинника телефон↔ПК
 
 
+# Функції, які користувач може вмикати/вимикати (API завжди увімкнений — без
+# нього телефон не працює). Ключ → людська назва. Дефолт усіх — увімкнено.
+FEATURES = {
+    "sorter": "Сортувальник фото/відео",
+    "volume": "Керування гучністю",
+    "tasks": "Задачі",
+    "autoshutdown": "Авто-вимкнення ПК",
+}
+
+
 @dataclass
 class AppConfig:
     token: str = field(default_factory=_ensure_token)
     api: ApiConfig = field(default_factory=ApiConfig)
     sorter: SorterConfig = field(default_factory=SorterConfig)
     auto_shutdown_idle_minutes: int = 10
+    # увімкнені функції (з config.json["features"]); за замовч. усі True
+    features: dict = field(default_factory=lambda: {k: True for k in FEATURES})
+    first_run_done: bool = False
 
     def __post_init__(self) -> None:
         user = _load_user_config()
@@ -198,6 +211,28 @@ class AppConfig:
             self.auto_shutdown_idle_minutes = int(user["auto_shutdown_idle_minutes"])
         if "vram_limit_mb" in user:
             self.sorter.vram_limit_mb = int(user["vram_limit_mb"])
+        # feature-флаги
+        saved = user.get("features", {})
+        for k in FEATURES:
+            if k in saved:
+                self.features[k] = bool(saved[k])
+        self.first_run_done = bool(user.get("first_run_done", False))
+
+    def feature_enabled(self, key: str) -> bool:
+        """Чи ввімкнена функція (незнайомий ключ вважаємо ввімкненим)."""
+        return bool(self.features.get(key, True))
+
+    def set_features(self, features: dict) -> None:
+        """Зберігає набір увімкнених функцій у config.json + позначає перший запуск."""
+        for k in FEATURES:
+            if k in features:
+                self.features[k] = bool(features[k])
+        user = _load_user_config()
+        user["features"] = dict(self.features)
+        user["first_run_done"] = True
+        paths.CONFIG_FILE.write_text(
+            json.dumps(user, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.first_run_done = True
 
     def set_include_today(self, value: bool) -> None:
         """Зберігає перемикач include_today у config.json (виклик з UI)."""

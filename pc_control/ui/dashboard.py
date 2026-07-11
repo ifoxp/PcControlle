@@ -154,7 +154,17 @@ class ServiceCard(QFrame):
 
 
 class Dashboard(QWidget):
-    SERVICE_ORDER = ["sorter", "volume", "autoshutdown", "api"]
+    # повний порядок; фактичний набір фільтрується за увімкненими функціями
+    _ALL_SERVICES = ["sorter", "volume", "autoshutdown", "api"]
+    # ключ картки сервісу → ключ функції (api завжди присутній)
+    _SVC_FEATURE = {"sorter": "sorter", "volume": "volume",
+                    "autoshutdown": "autoshutdown"}
+
+    @property
+    def SERVICE_ORDER(self):
+        return [k for k in self._ALL_SERVICES
+                if k not in self._SVC_FEATURE
+                or CONFIG.feature_enabled(self._SVC_FEATURE[k])]
 
     def __init__(self, on_demo=None, on_tasks=None):
         super().__init__()
@@ -293,19 +303,26 @@ class Dashboard(QWidget):
         scroll.setWidget(host)
         lay.addWidget(scroll, 1)
 
-        # --- дії ---
-        actions = QHBoxLayout()
-        actions.setSpacing(10)
-        self.btn_run = QPushButton("▶   Запустити аналіз фото")
-        self.btn_run.setObjectName("primary")
-        self.btn_run.clicked.connect(self._run_sorter)
-        actions.addWidget(self.btn_run)
-        self.chk_today = QCheckBox("Включати сьогоднішні фото")
-        self.chk_today.setChecked(CONFIG.sorter.include_today)
-        self.chk_today.toggled.connect(CONFIG.set_include_today)
-        actions.addWidget(self.chk_today)
-        actions.addStretch(1)
-        lay.addLayout(actions)
+        # --- дії (аналіз фото — лише якщо сортувальник увімкнено) ---
+        if CONFIG.feature_enabled("sorter"):
+            actions = QHBoxLayout()
+            actions.setSpacing(10)
+            self.btn_run = QPushButton("▶   Запустити аналіз фото")
+            self.btn_run.setObjectName("primary")
+            self.btn_run.clicked.connect(self._run_sorter)
+            actions.addWidget(self.btn_run)
+            self.chk_today = QCheckBox("Включати сьогоднішні фото")
+            self.chk_today.setChecked(CONFIG.sorter.include_today)
+            self.chk_today.toggled.connect(CONFIG.set_include_today)
+            actions.addWidget(self.chk_today)
+            actions.addStretch(1)
+            lay.addLayout(actions)
+        else:
+            self.btn_run = None
+            self.chk_today = None
+
+        # --- перемикачі функцій + застосувати й перезапустити ---
+        lay.addWidget(self._build_features_section())
 
         # --- лог ---
         log_sect = QLabel("ЛОГ")
@@ -319,6 +336,54 @@ class Dashboard(QWidget):
         lay.addWidget(self.log)
 
         return page
+
+    def _build_features_section(self) -> QWidget:
+        """Перемикачі функцій (сортувальник/гучність/задачі/авто-вимкнення) +
+        кнопка «Застосувати й перезапустити» (зʼявляється лише при змінах)."""
+        from ..core.config import FEATURES
+        box = QFrame()
+        box.setObjectName("card")
+        v = QVBoxLayout(box)
+        v.setContentsMargins(16, 12, 16, 14)
+        v.setSpacing(8)
+        cap = QLabel("ФУНКЦІЇ")
+        cap.setObjectName("sectionTitle")
+        v.addWidget(cap)
+
+        self._feat_checks: dict[str, QCheckBox] = {}
+        self._feat_initial = {k: CONFIG.feature_enabled(k) for k in FEATURES}
+        for key, label in FEATURES.items():
+            cb = QCheckBox(label)
+            cb.setChecked(CONFIG.feature_enabled(key))
+            cb.toggled.connect(self._on_feature_toggled)
+            v.addWidget(cb)
+            self._feat_checks[key] = cb
+
+        self._btn_apply = QPushButton("Застосувати й перезапустити")
+        self._btn_apply.setObjectName("primary")
+        self._btn_apply.clicked.connect(self._apply_and_restart)
+        self._btn_apply.setVisible(False)  # лише коли є зміни
+        v.addWidget(self._btn_apply)
+        return box
+
+    def _on_feature_toggled(self, _=None) -> None:
+        changed = any(cb.isChecked() != self._feat_initial[k]
+                      for k, cb in self._feat_checks.items())
+        self._btn_apply.setVisible(changed)
+
+    def _apply_and_restart(self) -> None:
+        features = {k: cb.isChecked() for k, cb in self._feat_checks.items()}
+        CONFIG.set_features(features)
+        # перезапуск застосунку, щоб сервіси/UI піднялись за новим вибором
+        import sys, os, subprocess
+        try:
+            if getattr(sys, "frozen", False):
+                subprocess.Popen([sys.executable], cwd=os.path.dirname(sys.executable))
+            else:
+                subprocess.Popen([sys.executable, "main.py"])
+        except Exception:
+            pass
+        QApplication.instance().quit()
 
     # -------------------------------------------------------------- refresh
     def _refresh(self) -> None:
