@@ -105,6 +105,42 @@ def _radio_dot_svg() -> str:
     return f"data:image/svg+xml;base64,{b64}"
 
 
+def dark_palette():
+    """
+    Темна QPalette для всього застосунку. Без неї при СВІТЛІЙ темі Windows
+    віджети, не покриті QSS (тултіпи, QMessageBox, стандартні діалоги, плейсхолдери,
+    виділення), малюються білими/системними. Разом зі стилем Fusion гарантує,
+    що застосунок ЗАВЖДИ темний, незалежно від теми системи.
+    """
+    from PySide6.QtGui import QColor, QPalette
+
+    p = QPalette()
+    c = QColor
+    for group in (QPalette.Active, QPalette.Inactive, QPalette.Disabled):
+        dim = group == QPalette.Disabled
+        fg = c(MUTED_2) if dim else c(FG)
+        p.setColor(group, QPalette.Window, c(BG))
+        p.setColor(group, QPalette.WindowText, fg)
+        p.setColor(group, QPalette.Base, c(BG_2))
+        p.setColor(group, QPalette.AlternateBase, c(SURFACE))
+        p.setColor(group, QPalette.Text, fg)
+        p.setColor(group, QPalette.PlaceholderText, c(MUTED_2))
+        p.setColor(group, QPalette.Button, c(SURFACE_2))
+        p.setColor(group, QPalette.ButtonText, fg)
+        p.setColor(group, QPalette.BrightText, c("#FF5555"))
+        p.setColor(group, QPalette.ToolTipBase, c(SURFACE))
+        p.setColor(group, QPalette.ToolTipText, c(FG))
+        p.setColor(group, QPalette.Highlight, c(ACCENT_DIM) if dim else c(ACCENT))
+        p.setColor(group, QPalette.HighlightedText, c("#062e16"))
+        p.setColor(group, QPalette.Link, c(INFO))
+        p.setColor(group, QPalette.Light, c(SURFACE_3))
+        p.setColor(group, QPalette.Midlight, c(SURFACE_2))
+        p.setColor(group, QPalette.Mid, c(BORDER))
+        p.setColor(group, QPalette.Dark, c(BG_2))
+        p.setColor(group, QPalette.Shadow, c("#000000"))
+    return p
+
+
 def stylesheet() -> str:
     """Глобальний QSS для всього застосунку."""
     return f"""
@@ -286,6 +322,19 @@ def stylesheet() -> str:
     QScrollBar::handle:vertical:hover {{ background: {MUTED_2}; }}
     QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
     QScrollBar::add-page, QScrollBar::sub-page {{ background: none; }}
+
+    /* --- Тултіпи (без QSS при світлій темі Windows були білі) --- */
+    QToolTip {{
+        background-color: {SURFACE}; color: {FG};
+        border: 1px solid {BORDER}; border-radius: 6px; padding: 6px 9px;
+        font-size: 12px;
+    }}
+
+    /* Підзаголовок секції всередині картки налаштувань */
+    QLabel#subsectionTitle {{
+        font-size: 11px; font-weight: 700; color: {MUTED}; letter-spacing: 1px;
+        padding-top: 4px;
+    }}
 
     /* --- Меню трею --- */
     QMenu {{

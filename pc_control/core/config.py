@@ -199,6 +199,8 @@ class AppConfig:
     # увімкнені функції (з config.json["features"]); за замовч. усі True
     features: dict = field(default_factory=lambda: {k: True for k in FEATURES})
     first_run_done: bool = False
+    # що відкривати кліком по трей-іконці: "tasks" | "dashboard"
+    tray_click_action: str = "tasks"
 
     def __post_init__(self) -> None:
         user = _load_user_config()
@@ -217,6 +219,8 @@ class AppConfig:
             if k in saved:
                 self.features[k] = bool(saved[k])
         self.first_run_done = bool(user.get("first_run_done", False))
+        action = str(user.get("tray_click_action", "tasks"))
+        self.tray_click_action = action if action in ("tasks", "dashboard") else "tasks"
 
     def feature_enabled(self, key: str) -> bool:
         """Чи ввімкнена функція (незнайомий ключ вважаємо ввімкненим)."""

@@ -87,6 +87,13 @@ def start_background() -> threading.Thread | None:
     return t
 
 
+def restart() -> None:
+    """Перезапускає тунель з АКТУАЛЬНИМ токеном із CONFIG — викликається після
+    зміни токена в налаштуваннях, щоб не чекати перезапуску всього застосунку."""
+    stop()
+    start_background()
+
+
 def stop() -> None:
     """Зупиняє cloudflared (при виході із застосунку)."""
     global _proc

@@ -59,9 +59,6 @@ class TrayAnimator(QObject):
     def stop(self) -> None:
         self._timer.stop()
 
-    def current_icon(self):
-        return self._engine.render_icon(_ICON_SIZE)
-
     def play_demo(self) -> None:
         """Запускає показ усіх анімацій по черзі (для кнопки в налаштуваннях)."""
         self._demo_idx = 0

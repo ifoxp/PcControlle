@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox,
     QDialog,
     QLabel,
     QPushButton,
@@ -19,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from ..core.config import CONFIG, FEATURES
 from . import theme
+from .switch import ToggleSwitch
 
 
 # короткі описи для майстра
@@ -39,7 +39,7 @@ class FirstRunDialog(QDialog):
         self.setModal(True)
         self.setMinimumWidth(440)
         self.setStyleSheet(theme.stylesheet())
-        self._checks: dict[str, QCheckBox] = {}
+        self._checks: dict[str, ToggleSwitch] = {}
         self._build()
 
     def _build(self) -> None:
@@ -58,14 +58,14 @@ class FirstRunDialog(QDialog):
         lay.addWidget(hint)
 
         for key, label in FEATURES.items():
-            cb = QCheckBox(label)
-            cb.setChecked(CONFIG.feature_enabled(key))
+            sw = ToggleSwitch(label)
+            sw.set_checked(CONFIG.feature_enabled(key))
             d = QLabel(_DESCR.get(key, ""))
             d.setObjectName("fieldHint")
             d.setWordWrap(True)
-            lay.addWidget(cb)
+            lay.addWidget(sw)
             lay.addWidget(d)
-            self._checks[key] = cb
+            self._checks[key] = sw
 
         btn = QPushButton("Готово")
         btn.setObjectName("primary")
@@ -73,6 +73,6 @@ class FirstRunDialog(QDialog):
         lay.addWidget(btn, alignment=Qt.AlignRight)
 
     def _save(self) -> None:
-        features = {k: cb.isChecked() for k, cb in self._checks.items()}
+        features = {k: sw.is_checked() for k, sw in self._checks.items()}
         CONFIG.set_features(features)
         self.accept()

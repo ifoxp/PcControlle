@@ -102,10 +102,11 @@ class TrayApp:
 
     # --------------------------------------------------------- handlers
     def _on_activated(self, reason) -> None:
-        # клік/подвійний клік по іконці трею: якщо «Задачі» увімкнені — відкриваємо
-        # їх; якщо вимкнені — відкриваємо панель (налаштування/огляд).
+        # клік/подвійний клік по іконці трею: користувач сам обирає у налаштуваннях
+        # («Іконка в треї»), що відкривати — Задачі чи Панель. Якщо обрані «Задачі»,
+        # але функцію вимкнено — відкриваємо панель.
         if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
-            if CONFIG.feature_enabled("tasks"):
+            if CONFIG.tray_click_action == "tasks" and CONFIG.feature_enabled("tasks"):
                 self.show_tasks()
             else:
                 self.show_dashboard()
@@ -181,6 +182,13 @@ def run_app(start_services) -> int:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)  # PROCESS_SYSTEM_DPI_AWARE
     except Exception:
         pass
+    # Явний AppUserModelID: таскбар ідентифікує застосунок самостійно (не під
+    # generic-хостом) і бере іконку з вікна, а не зі старого кешу Explorer.
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Shramix.PCControl")
+    except Exception:
+        pass
     try:
         from PySide6.QtCore import Qt as _Qt
         QApplication.setHighDpiScaleFactorRoundingPolicy(
@@ -191,7 +199,13 @@ def run_app(start_services) -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("PC Control")
     app.setQuitOnLastWindowClosed(False)  # закриття вікна не вбиває застосунок
+    # Fusion + темна палітра: без цього при СВІТЛІЙ темі Windows усе, що не
+    # покрите QSS (тултіпи, QMessageBox, системні діалоги), ставало білим.
+    app.setStyle("Fusion")
+    app.setPalette(theme.dark_palette())
     app.setStyleSheet(theme.stylesheet())
+    # глобальна іконка: її успадковують УСІ вікна/діалоги (навіть без власної)
+    app.setWindowIcon(app_icon())
     # завантажити Plus Jakarta Sans, якщо є поруч (інакше fallback Segoe UI)
     _load_bundled_font()
 

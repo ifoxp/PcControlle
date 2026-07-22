@@ -13,7 +13,6 @@ from datetime import datetime
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
-    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -35,6 +34,7 @@ from .frameless import FramelessWindow
 from .service_icons import service_avatar
 from .pairing_panel import PairingPanel
 from .settings_panel import SettingsPanel
+from .switch import ToggleSwitch
 
 
 def _human_time(iso: str | None) -> str:
@@ -260,10 +260,13 @@ class Dashboard(FramelessWindow):
             self._pairing.refresh()
 
     def _build_overview(self) -> QWidget:
+        # ЄДИНИЙ скрол на ВСЮ вкладку (як сторінка сайту): раніше картки сервісів
+        # сиділи у власному маленькому скролі й стискались до 1.5 картки —
+        # тепер вони розгорнуті повністю, а прокручується вся сторінка.
         page = QWidget()
         page.setObjectName("root")
         lay = QVBoxLayout(page)
-        lay.setContentsMargins(0, 8, 0, 0)
+        lay.setContentsMargins(0, 8, 8, 0)
         lay.setSpacing(16)
 
         # --- метрики ---
@@ -276,26 +279,14 @@ class Dashboard(FramelessWindow):
             stats.addWidget(s)
         lay.addLayout(stats)
 
-        # --- картки ---
+        # --- картки (без внутрішнього скролу — на повну висоту) ---
         sect = QLabel("СЕРВІСИ")
         sect.setObjectName("sectionTitle")
         lay.addWidget(sect)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        host = QWidget()
-        host.setObjectName("root")
-        cl = QVBoxLayout(host)
-        cl.setContentsMargins(0, 0, 6, 0)
-        cl.setSpacing(10)
         for key in self.SERVICE_ORDER:
             card = ServiceCard(key)
             self._cards[key] = card
-            cl.addWidget(card)
-        cl.addStretch(1)
-        scroll.setWidget(host)
-        lay.addWidget(scroll, 1)
+            lay.addWidget(card)
 
         # --- дії (аналіз фото — лише якщо сортувальник увімкнено) ---
         if CONFIG.feature_enabled("sorter"):
@@ -307,9 +298,9 @@ class Dashboard(FramelessWindow):
             self.btn_run.setIcon(QIcon(ui_icons.play(14, "#062e16")))
             self.btn_run.clicked.connect(self._run_sorter)
             actions.addWidget(self.btn_run)
-            self.chk_today = QCheckBox("Включати сьогоднішні фото")
-            self.chk_today.setChecked(CONFIG.sorter.include_today)
-            self.chk_today.toggled.connect(CONFIG.set_include_today)
+            self.chk_today = ToggleSwitch("Включати сьогоднішні фото")
+            self.chk_today.set_checked(CONFIG.sorter.include_today)
+            self.chk_today.connect(CONFIG.set_include_today)
             actions.addWidget(self.chk_today)
             actions.addStretch(1)
             lay.addLayout(actions)
@@ -328,10 +319,17 @@ class Dashboard(FramelessWindow):
         self.log.setObjectName("log")
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(400)
-        self.log.setFixedHeight(130)
+        self.log.setFixedHeight(160)
         lay.addWidget(self.log)
+        lay.addStretch(1)
 
-        return page
+        # обгортка-скрол на всю сторінку
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(page)
+        return scroll
 
     def _build_features_section(self) -> QWidget:
         """Перемикачі функцій (сортувальник/гучність/задачі/авто-вимкнення) +
@@ -346,14 +344,14 @@ class Dashboard(FramelessWindow):
         cap.setObjectName("sectionTitle")
         v.addWidget(cap)
 
-        self._feat_checks: dict[str, QCheckBox] = {}
+        self._feat_checks: dict[str, ToggleSwitch] = {}
         self._feat_initial = {k: CONFIG.feature_enabled(k) for k in FEATURES}
         for key, label in FEATURES.items():
-            cb = QCheckBox(label)
-            cb.setChecked(CONFIG.feature_enabled(key))
-            cb.toggled.connect(self._on_feature_toggled)
-            v.addWidget(cb)
-            self._feat_checks[key] = cb
+            sw = ToggleSwitch(label)
+            sw.set_checked(CONFIG.feature_enabled(key))
+            sw.connect(self._on_feature_toggled)
+            v.addWidget(sw)
+            self._feat_checks[key] = sw
 
         self._btn_apply = QPushButton("Застосувати й перезапустити")
         self._btn_apply.setObjectName("primary")
@@ -363,12 +361,12 @@ class Dashboard(FramelessWindow):
         return box
 
     def _on_feature_toggled(self, _=None) -> None:
-        changed = any(cb.isChecked() != self._feat_initial[k]
-                      for k, cb in self._feat_checks.items())
+        changed = any(sw.is_checked() != self._feat_initial[k]
+                      for k, sw in self._feat_checks.items())
         self._btn_apply.setVisible(changed)
 
     def _apply_and_restart(self) -> None:
-        features = {k: cb.isChecked() for k, cb in self._feat_checks.items()}
+        features = {k: sw.is_checked() for k, sw in self._feat_checks.items()}
         CONFIG.set_features(features)
         # перезапуск застосунку, щоб сервіси/UI піднялись за новим вибором
         import sys, os, subprocess

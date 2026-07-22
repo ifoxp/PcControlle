@@ -114,6 +114,12 @@ class FramelessWindow(QWidget):
 
         self._container = QWidget()
         self._container.setObjectName("windowRoot")
+        # ВЛАСНИЙ курсор контейнера — критично: курсор ресайзу ставиться на все
+        # ВІКНО, а дочірні віджети без свого курсора успадковують його. Рухи миші
+        # над контентом до вікна не доходять (mouseTracking дочірніх вимкнено),
+        # тож стрілки ресайзу «залипали» над вмістом (при скролі тощо). Явний
+        # Arrow на контейнері -> стрілки видно лише на рамці/тіні вікна.
+        self._container.setCursor(Qt.ArrowCursor)
         shadow = QGraphicsDropShadowEffect(self)
         shadow.setBlurRadius(28)
         shadow.setOffset(0, 6)
@@ -180,10 +186,19 @@ class FramelessWindow(QWidget):
             self._do_resize(e.globalPosition().toPoint())
             return
         if self.isMaximized():
-            self.setCursor(Qt.ArrowCursor)
+            self.unsetCursor()
             return
         edge = self._edge_at(e.position().toPoint())
-        self.setCursor(self._CURSORS.get(edge, Qt.ArrowCursor))
+        if edge:
+            self.setCursor(self._CURSORS[edge])
+        else:
+            self.unsetCursor()
+
+    def leaveEvent(self, e):
+        # миша покинула вікно — скидаємо курсор ресайзу, щоб не «залип»
+        if not self._resize_edge:
+            self.unsetCursor()
+        super().leaveEvent(e)
 
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton and not self.isMaximized():

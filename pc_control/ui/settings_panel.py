@@ -1,11 +1,14 @@
 """
 Панель налаштувань (вкладка «Налаштування»).
 
-Дозволяє редагувати без правки .env вручну:
-  * папки сортувальника (Camera / Сміття / Синхронізація) з вибором через діалог;
-  * модель Ollama, URL, шлях до ollama.exe;
-  * токен API та хост;
-  * пороги (авто-вимкнення, ліміт VRAM).
+Структура секцій — за функціями, а не «розкидано» (усе про сортувальник в
+ОДНІЙ секції: папки + модель Ollama + ліміт VRAM):
+  * Сортувальник фото/відео (папки, модель, ресурси) — якщо функцію увімкнено;
+  * Авто-вимкнення (вікно присутності) — якщо функцію увімкнено;
+  * Гучність застосунків — якщо функцію увімкнено;
+  * Мережа та безпека, Cloudflare тунель;
+  * Іконка в треї (анімації + що відкривати кліком);
+  * Права адміністратора та автозапуск.
 
 Зберігає у .env / config.json через CONFIG.apply_settings().
 """
@@ -14,6 +17,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -28,6 +32,7 @@ from PySide6.QtWidgets import (
 from ..core.config import CONFIG
 from ..services import volume_manager
 from . import theme
+from .switch import ToggleSwitch
 
 
 class _Field(QWidget):
@@ -132,103 +137,12 @@ class _Group(QFrame):
     def add(self, w: QWidget):
         self.body.addWidget(w)
 
-
-class _ToggleSwitch(QWidget):
-    """iOS-подібний перемикач: підпис ліворуч + доріжка з кружком, що їздить.
-    Сигнал toggled(bool) при кліку користувача (програмна зміна — set_checked —
-    сигнал НЕ емітить, щоб не зациклювати з оновленням статусу)."""
-
-    def __init__(self, label: str, parent=None):
-        super().__init__(parent)
-        self._checked = False
-        self._enabled_ux = True
-        self._pos = 0.0  # 0..1 позиція кружка (для плавності)
-        self._label = label
-        self._cbs = []
-        self.setMinimumHeight(34)
-        self.setCursor(Qt.PointingHandCursor)
-        from PySide6.QtCore import QPropertyAnimation
-        self._anim = QPropertyAnimation(self, b"knob")
-        self._anim.setDuration(140)
-
-    # --- Qt property для анімації кружка ---
-    def _get_knob(self):
-        return self._pos
-
-    def _set_knob(self, v):
-        self._pos = v
-        self.update()
-
-    from PySide6.QtCore import Property as _QtProperty
-    knob = _QtProperty(float, _get_knob, _set_knob)
-
-    def connect(self, cb):
-        self._cbs.append(cb)
-
-    def is_checked(self) -> bool:
-        return self._checked
-
-    def set_checked(self, on: bool):
-        """Програмна зміна — без сигналу."""
-        self._checked = bool(on)
-        self._animate_to(1.0 if on else 0.0)
-
-    def set_ux_enabled(self, on: bool):
-        self._enabled_ux = bool(on)
-        self.setCursor(Qt.PointingHandCursor if on else Qt.ForbiddenCursor)
-        self.update()
-
-    def _animate_to(self, target: float):
-        self._anim.stop()
-        self._anim.setStartValue(self._pos)
-        self._anim.setEndValue(target)
-        self._anim.start()
-
-    def mousePressEvent(self, e):
-        if not self._enabled_ux:
-            return
-        self._checked = not self._checked
-        self._animate_to(1.0 if self._checked else 0.0)
-        for cb in self._cbs:
-            cb(self._checked)
-
-    def paintEvent(self, e):
-        from PySide6.QtGui import QPainter, QColor, QFont
-        from PySide6.QtCore import QRectF
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        h = self.height()
-        # трек праворуч
-        track_w, track_h = 46, 26
-        track_x = self.width() - track_w
-        track_y = (h - track_h) / 2
-        dim = not self._enabled_ux
-        on_col = QColor("#334155") if dim else QColor(theme.ACCENT)
-        off_col = QColor("#1E293B") if dim else QColor("#334155")
-        # інтерполяція кольору треку за позицією
-        t = self._pos
-        col = QColor(
-            int(off_col.red() + (on_col.red() - off_col.red()) * t),
-            int(off_col.green() + (on_col.green() - off_col.green()) * t),
-            int(off_col.blue() + (on_col.blue() - off_col.blue()) * t),
-        )
-        p.setPen(Qt.NoPen)
-        p.setBrush(col)
-        p.drawRoundedRect(QRectF(track_x, track_y, track_w, track_h),
-                          track_h / 2, track_h / 2)
-        # кружок
-        knob_d = track_h - 6
-        knob_x = track_x + 3 + (track_w - knob_d - 6) * self._pos
-        knob_y = track_y + 3
-        p.setBrush(QColor("#94A3B8") if dim else QColor("#F8FAFC"))
-        p.drawEllipse(QRectF(knob_x, knob_y, knob_d, knob_d))
-        # підпис ліворуч
-        p.setPen(QColor("#64748B") if dim else QColor(theme.FG))
-        f = QFont(); f.setPointSize(10)
-        p.setFont(f)
-        p.drawText(QRectF(0, 0, track_x - 10, h),
-                   int(Qt.AlignVCenter | Qt.AlignLeft), self._label)
-        p.end()
+    def add_subsection(self, title: str):
+        """Підзаголовок усередині картки — щоб не плодити окремі картки на
+        кожну дрібницю однієї функції."""
+        lbl = QLabel(title)
+        lbl.setObjectName("subsectionTitle")
+        self.body.addWidget(lbl)
 
 
 class _VolumeRow(QFrame):
@@ -338,9 +252,12 @@ class SettingsPanel(QWidget):
         # увімкнена.
         sorter_on = CONFIG.feature_enabled("sorter")
         volume_on = CONFIG.feature_enabled("volume")
+        autoshutdown_on = CONFIG.feature_enabled("autoshutdown")
 
-        # --- Папки ---
-        g_paths = _Group("Папки сортувальника")
+        # --- Сортувальник: УСЕ в одній секції (папки + модель + ресурси) ---
+        g_sorter = _Group("Сортувальник фото / відео")
+
+        g_sorter.add_subsection("Папки")
         self.f_camera = _Field("Папка фото (Camera)", str(s.camera_dir),
                                "Звідки беруться нові фото/відео для аналізу", browse=True)
         self.f_trash = _Field("Папка сміття", str(s.trash_dir),
@@ -348,19 +265,38 @@ class SettingsPanel(QWidget):
         self.f_sync = _Field("Папка синхронізації", str(s.sync_dir),
                              "Куди копіюються цінні фото", browse=True)
         for f in (self.f_camera, self.f_trash, self.f_sync):
-            g_paths.add(f)
-        if sorter_on:
-            root.addWidget(g_paths)
+            g_sorter.add(f)
 
-        # --- Ollama ---
-        g_ollama = _Group("Модель Ollama")
+        g_sorter.add_subsection("Модель Ollama")
         self.f_model = _Field("Модель", s.ollama_model, "Назва vision-моделі в Ollama")
         self.f_url = _Field("URL API", s.ollama_url)
         self.f_exe = _Field("Шлях до ollama.exe", s.ollama_exe, browse=False)
         for f in (self.f_model, self.f_url, self.f_exe):
-            g_ollama.add(f)
+            g_sorter.add(f)
+
+        g_sorter.add_subsection("Ресурси")
+        self.n_vram = _NumField("Ліміт VRAM для запуску аналізу", s.vram_limit_mb,
+                                "Аналіз чекає, якщо стороння програма (гра тощо) зайняла "
+                                "відеопам'яті більше за цей поріг",
+                                minimum=512, maximum=49152, suffix=" МБ")
+        g_sorter.add(self.n_vram)
+
+        # тримаємо посилання ЗАВЖДИ: без Qt-батька і Python-посилання приховану
+        # групу зібрав би GC разом із полями, а _save читає ці поля
+        self._g_sorter = g_sorter
         if sorter_on:
-            root.addWidget(g_ollama)
+            root.addWidget(g_sorter)
+
+        # --- Авто-вимкнення ---
+        g_auto_off = _Group("Авто-вимкнення ПК")
+        self.n_idle = _NumField("Вікно перевірки присутності", CONFIG.auto_shutdown_idle_minutes,
+                                "Скільки хвилин після ввімкнення чекати на активність (миша/клава). "
+                                "Якщо за цей час нікого — ПК вимкнеться. Є активність — не вимкнеться всю сесію.",
+                                minimum=1, maximum=240, suffix=" хв")
+        g_auto_off.add(self.n_idle)
+        self._g_auto_off = g_auto_off  # див. коментар вище про GC
+        if autoshutdown_on:
+            root.addWidget(g_auto_off)
 
         # --- Гучність застосунків ---
         self.g_volume = _VolumeOffsetsGroup()
@@ -400,37 +336,54 @@ class SettingsPanel(QWidget):
         g_cf.add(self.f_cf_token)
         root.addWidget(g_cf)
 
-        # --- Пороги ---
-        g_thr = _Group("Пороги")
-        self.n_idle = _NumField("Вікно перевірки присутності", CONFIG.auto_shutdown_idle_minutes,
-                                "Скільки хвилин після ввімкнення чекати на активність (миша/клава). "
-                                "Якщо за цей час нікого — ПК вимкнеться. Є активність — не вимкнеться всю сесію.",
-                                minimum=1, maximum=240, suffix=" хв")
-        self.n_vram = _NumField("Ліміт VRAM", s.vram_limit_mb,
-                                "Чекати, якщо стороння програма зайняла більше",
-                                minimum=512, maximum=49152, suffix=" МБ")
-        g_thr.add(self.n_idle)
-        g_thr.add(self.n_vram)
-        root.addWidget(g_thr)
-
-        # --- Іконка трею / демо анімацій ---
+        # --- Іконка трею: анімації + що відкривати кліком ---
         g_icon = _Group("Іконка в треї")
         desc = QLabel(
             "Іконка біля годинника змінює вигляд залежно від подій:\n"
             "•  спокій — рівне світіння екрана\n"
             "•  запит із телефона — хвилі сигналу\n"
-            "•  обробка фото/відео — лінія сканування\n"
+            "•  обробка фото/відео — карусель міні-фото на екрані\n"
             "•  очікування авто-вимкнення — кільце-таймер\n"
             "•  помилка — червоний пульс"
         )
         desc.setObjectName("fieldHint")
         desc.setWordWrap(True)
         g_icon.add(desc)
-        self.btn_demo = QPushButton("▶   Показати всі анімації")
+        self.btn_demo = QPushButton("Показати всі анімації")
+        from . import ui_icons
+        from PySide6.QtGui import QIcon
+        self.btn_demo.setIcon(QIcon(ui_icons.play(13, theme.FG)))
         self.btn_demo.clicked.connect(self._play_demo)
         if self._on_demo is None:
             self.btn_demo.setEnabled(False)  # немає трею (напр. у прев'ю)
         g_icon.add(self.btn_demo)
+
+        g_icon.add_subsection("Клік по іконці відкриває")
+        click_row = QHBoxLayout()
+        click_row.setSpacing(8)
+        self._click_group = QButtonGroup(self)
+        self._click_group.setExclusive(True)
+        self._click_btns = {}
+        tasks_on = CONFIG.feature_enabled("tasks")
+        for value, label in (("tasks", "Задачі"), ("dashboard", "Панель керування")):
+            b = QPushButton(label)
+            b.setObjectName("ghost")
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            if value == "tasks" and not tasks_on:
+                b.setEnabled(False)
+                b.setToolTip("Функцію «Задачі» вимкнено (вкладка «Огляд»)")
+            self._click_group.addButton(b)
+            self._click_btns[value] = b
+            click_row.addWidget(b)
+        click_row.addStretch(1)
+        current = CONFIG.tray_click_action
+        if current == "tasks" and not tasks_on:
+            current = "dashboard"
+        self._click_btns.get(current, self._click_btns["dashboard"]).setChecked(True)
+        for value, b in self._click_btns.items():
+            b.clicked.connect(lambda _=False, v=value: self._set_tray_click(v))
+        g_icon.body.addLayout(click_row)
         root.addWidget(g_icon)
 
         # --- Права адміна + автозапуск ---
@@ -448,12 +401,12 @@ class SettingsPanel(QWidget):
         g_auto.add(auto_desc)
 
         # перемикач 1 (головний): права адміністратора
-        self.sw_admin = _ToggleSwitch("Права адміністратора")
+        self.sw_admin = ToggleSwitch("Права адміністратора")
         self.sw_admin.connect(self._on_admin_toggled)
         g_auto.add(self.sw_admin)
 
         # перемикач 2 (залежний): автозапуск — активний лише при адмін-правах
-        self.sw_autostart = _ToggleSwitch("Автозапуск при вході в Windows")
+        self.sw_autostart = ToggleSwitch("Автозапуск при вході в Windows")
         self.sw_autostart.connect(self._on_autostart_toggled)
         g_auto.add(self.sw_autostart)
 
@@ -477,11 +430,16 @@ class SettingsPanel(QWidget):
         root.addLayout(actions)
         root.addStretch(1)
 
+    def _set_tray_click(self, value: str):
+        """Зберігає, що відкривати кліком по трей-іконці (застосовується одразу)."""
+        CONFIG.tray_click_action = value
+        CONFIG.set_user_value("tray_click_action", value)
+
     def _play_demo(self):
         if self._on_demo:
             self._on_demo()
-            self.btn_demo.setText("▶   Дивись на іконку біля годинника →")
-            QTimer.singleShot(14000, lambda: self.btn_demo.setText("▶   Показати всі анімації"))
+            self.btn_demo.setText("Дивись на іконку біля годинника")
+            QTimer.singleShot(14000, lambda: self.btn_demo.setText("Показати всі анімації"))
 
     def _refresh_autostart_status(self):
         """Синхронізує перемикачі з фактичним станом (без емісії сигналів)."""
@@ -492,14 +450,15 @@ class SettingsPanel(QWidget):
         self.sw_autostart.set_checked(autorun)
         # автозапуск можна чіпати лише коли є права адміна (задача — highest)
         self.sw_autostart.set_ux_enabled(admin)
+        # без символів ✓/○ — Onest не має цих гліфів (рендерились квадратиками)
         if not admin:
             self._auto_status.setText(
-                "○ Без прав адміна · температура CPU недоступна. "
+                "Без прав адміна · температура CPU недоступна. "
                 "Увімкни права, щоб керувати автозапуском.")
         elif autorun:
-            self._auto_status.setText("✓ Права адміна активні · автозапуск увімкнено")
+            self._auto_status.setText("Права адміна активні · автозапуск увімкнено")
         else:
-            self._auto_status.setText("✓ Права адміна активні · автозапуск вимкнено")
+            self._auto_status.setText("Права адміна активні · автозапуск вимкнено")
 
     def _on_admin_toggled(self, on: bool):
         from ..core import autostart
@@ -572,7 +531,32 @@ class SettingsPanel(QWidget):
             "auto_shutdown_idle_minutes": self.n_idle.value(),
             "vram_limit_mb": self.n_vram.value(),
         }
-        CONFIG.apply_settings(values)
-        self.status.setText("✓ Збережено. Деякі зміни (хост/порт) — після перезапуску.")
+        old_cf = CONFIG.api.cf_tunnel_token.strip()
+        old_public = CONFIG.api.public_host.strip()
+        try:
+            CONFIG.apply_settings(values)
+        except Exception as e:
+            # помилку запису (.env заблокований тощо) ПОКАЗУЄМО, а не ковтаємо —
+            # інакше здається, що «не зберігається» без пояснення
+            self.status.setText(f"Помилка збереження: {e}")
+            return
+
+        msg = "Збережено. Деякі зміни (хост/порт) — після перезапуску."
+        new_cf = CONFIG.api.cf_tunnel_token.strip()
+        if new_cf != old_cf or CONFIG.api.public_host.strip() != old_public:
+            if bool(new_cf) != bool(old_cf):
+                # перемкнувся сам РЕЖИМ (тунель <-> прямий): міняється bind-хост і
+                # TLS сервера — це можливо лише з повним перезапуском застосунку
+                msg = "Збережено. Вмикання/вимикання тунелю — після перезапуску застосунку."
+            else:
+                # токен/адреса змінились у межах тунель-режиму — перезапускаємо
+                # cloudflared одразу, без перезапуску застосунку
+                try:
+                    from ..services import cloudflared
+                    cloudflared.restart()
+                    msg = "Збережено. Тунель Cloudflare перезапущено з новими даними."
+                except Exception as e:
+                    msg = f"Збережено, але тунель не перезапустився: {e}"
+        self.status.setText(msg)
         if self._on_saved:
             self._on_saved()

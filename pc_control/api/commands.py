@@ -31,7 +31,7 @@
 from __future__ import annotations
 
 # Версія маніфесту: телефон порівнює й перемальовує сітку, коли змінилась.
-MANIFEST_VERSION = 6
+MANIFEST_VERSION = 7
 
 # Дозволені типи віджетів (для валідації й документації)
 WIDGETS = {"button", "toggle", "slider", "media_view", "audio", "text_input",
@@ -205,18 +205,18 @@ def build_manifest(caps: dict | None = None) -> dict:
 
     caps (від сервера):
       power     — {"shutdown":bool,"restart":bool,"sleep":bool,"hibernate":bool,"lock":bool}
-      monitors  — к-ть моніторів (для приховування «Монітори», якщо один)
+      monitors  — к-ть моніторів (інформаційно; команди більше НЕ ховаємо)
 
-    Розумне приховування: недоступні дії живлення не потрапляють у power_menu;
-    команда «Монітори» ховається, якщо монітор один. Так телефон не показує того,
-    чого ПК не вміє.
+    Недоступні дії живлення не потрапляють у power_menu (це реальна апаратна
+    можливість ПК). КОМАНДИ ж передаються ВСІ завжди — приховати зайве
+    користувач може сам на телефоні (вкладка «Вигляд»). Раніше «Монітори»
+    ховались при одному моніторі — це збивало синхронізацію команд.
     """
     caps = caps or {}
     power = caps.get("power") or {
         "shutdown": True, "restart": True, "sleep": True,
         "hibernate": True, "lock": True,
     }
-    monitors = int(caps.get("monitors", 2))
 
     # мітки дій живлення в порядку показу
     POWER_ACTIONS = [
@@ -235,8 +235,6 @@ def build_manifest(caps: dict | None = None) -> dict:
                 {"value": a, "label": lbl, "icon": ic}
                 for a, lbl, ic in POWER_ACTIONS if power.get(a, False)
             ]}
-        if c.get("id") == "toggle_monitor" and monitors < 2:
-            continue  # один монітор — перемикати нема сенсу
         out.append(c)
 
     return {

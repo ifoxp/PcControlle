@@ -107,6 +107,86 @@ class IconEngine:
             speed = 120.0
         self.rig.ring_angle = (self.rig.ring_angle + speed * dt) % 360
 
+    # ------------------------------------------------------ фото-карусель
+    def _carousel_offset(self) -> float:
+        """Позиція каруселі 0..3 (номер фото + зсув). 55% циклу фото стоїть у
+        центрі екрана, 45% — плавно (ease-cos) їде вліво до наступного."""
+        period = 1.5  # секунд на одне фото
+        t = (self._phase / period) % 3.0
+        idx = int(t)
+        frac = t - idx
+        ease_t = max(0.0, min(1.0, (frac - 0.55) / 0.45))
+        ease = 0.5 - 0.5 * math.cos(ease_t * math.pi)
+        return idx + ease
+
+    def _draw_mini_photo(self, p: QPainter, r: QRectF, col: QColor,
+                         alpha: float, kind: int, lw: float) -> None:
+        """Одне міні-фото: рамка + сонце + гори. kind (0..2) міняє композицію,
+        тож видно, що «кадри» в каруселі різні. На дуже малих розмірах (трей
+        16px) сонце опускаємо — лишається рамка з горами, інакше каша."""
+        c = QColor(col)
+        c.setAlphaF(max(0.0, min(1.0, alpha)))
+        pen = QPen(c)
+        pen.setWidthF(lw)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        tiny = r.width() < 12
+        rad = r.width() * 0.14
+        p.drawRoundedRect(r, rad, rad)
+
+        # сонце (пропускаємо на tiny — менше 1px, лише шум)
+        if not tiny:
+            sun_x, sun_y = ((0.30, 0.32), (0.68, 0.30), (0.50, 0.28))[kind]
+            sun_r = r.width() * 0.10
+            p.setPen(Qt.NoPen)
+            p.setBrush(c)
+            p.drawEllipse(QPointF(r.left() + r.width() * sun_x,
+                                  r.top() + r.height() * sun_y), sun_r, sun_r)
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+
+        # гори — ламана в нижній частині кадру
+        if tiny:
+            pts = (((0.10, 0.75), (0.45, 0.40), (0.90, 0.75)),
+                   ((0.10, 0.75), (0.60, 0.42), (0.90, 0.75)),
+                   ((0.10, 0.75), (0.35, 0.45), (0.62, 0.68), (0.90, 0.75)))[kind]
+        else:
+            pts = (((0.10, 0.78), (0.38, 0.44), (0.56, 0.64), (0.72, 0.50), (0.90, 0.78)),
+                   ((0.10, 0.78), (0.30, 0.54), (0.48, 0.70), (0.70, 0.42), (0.90, 0.78)),
+                   ((0.10, 0.78), (0.45, 0.40), (0.66, 0.62), (0.90, 0.78)))[kind]
+        p.drawPolyline([QPointF(r.left() + r.width() * px, r.top() + r.height() * py)
+                        for px, py in pts])
+
+    def _draw_photo_carousel(self, p: QPainter, screen: QRectF, col: QColor,
+                             alpha: float, lw: float) -> None:
+        """Карусель із 3 міні-фото всередині екрана монітора (стан «обробка
+        фото»): кадри по черзі проїжджають екраном — одразу видно, що ПК зараз
+        аналізує фотографії."""
+        if alpha <= 0.05:
+            return
+        p.save()
+        inset_x = screen.width() * 0.12
+        inset_y = screen.height() * 0.14
+        view = screen.adjusted(inset_x, inset_y, -inset_x, -inset_y)
+        p.setClipRect(view)
+
+        offset = self._carousel_offset()
+        ph_w = view.width() * 0.74
+        ph_h = view.height() * 0.88
+        gap = view.width() * 0.94   # крок між кадрами
+        cx, cy = view.center().x(), view.center().y()
+
+        for i in range(-1, 5):  # із запасом, щоб в'їзд/виїзд був безшовним
+            x = cx + (i - offset) * gap
+            if x + ph_w / 2 < view.left() or x - ph_w / 2 > view.right():
+                continue
+            self._draw_mini_photo(
+                p, QRectF(x - ph_w / 2, cy - ph_h / 2, ph_w, ph_h),
+                col, alpha, i % 3, lw)
+        p.restore()
+
     # ------------------------------------------------------------------ draw
     def _render_small(self, size: int) -> QPixmap:
         """Чіткий спрощений гліф для трею (16-28px): монітор + power, тонкі лінії."""
@@ -157,17 +237,15 @@ class IconEngine:
         p.drawLine(QPointF(cx - s * 0.18, stand_top + stand_gap),
                    QPointF(cx + s * 0.18, stand_top + stand_gap))
 
-        # power-символ всередині — крупний, із зазором від рамки
-        pr = mon_h * 0.34
-        pcx, pcy = cx, mon_y + mon_h / 2
-        p.save()
+        # вміст екрана: під час обробки фото — карусель міні-фото (видно, що
+        # йде аналіз), інакше — звичний power-символ
         if self.state == TrayState.PROCESSING_PHOTO:
-            p.translate(pcx, pcy)
-            p.rotate(self.rig.ring_angle)
-            p.translate(-pcx, -pcy)
-        p.drawArc(QRectF(pcx - pr, pcy - pr, 2 * pr, 2 * pr), 110 * 16, 320 * 16)
-        p.drawLine(QPointF(pcx, pcy - pr * 1.2), QPointF(pcx, pcy + pr * 0.1))
-        p.restore()
+            self._draw_photo_carousel(p, screen, col, 1.0, max(1.0, s * 0.06))
+        else:
+            pr = mon_h * 0.34
+            pcx, pcy = cx, mon_y + mon_h / 2
+            p.drawArc(QRectF(pcx - pr, pcy - pr, 2 * pr, 2 * pr), 110 * 16, 320 * 16)
+            p.drawLine(QPointF(pcx, pcy - pr * 1.2), QPointF(pcx, pcy + pr * 0.1))
 
         p.end()
         return pix
@@ -289,27 +367,27 @@ class IconEngine:
         p.drawLine(QPointF(cx - stand_w / 2, stand_top + stand_h),
                    QPointF(cx + stand_w / 2, stand_top + stand_h))
 
-        # --- символ живлення всередині екрана (більший за рахунок квадратного екрана) ---
+        # --- вміст екрана: power-символ <-> карусель фото (кросфейд за rig.scan) ---
+        # Під час обробки фото power-символ плавно зникає, а екраном їдуть
+        # міні-фото (карусель) + лінія сканування поверх — «ПК дивиться фото».
         pwr_color = QColor(theme.ACCENT) if not self.mono else line
         if self.state == TrayState.ERROR and self.mono:
             pwr_color = QColor(theme.DANGER)
-        pwr_pen = QPen(pwr_color)
-        pwr_pen.setWidthF(s * 0.075)
-        pwr_pen.setCapStyle(Qt.RoundCap)
-        p.setPen(pwr_pen)
-        pr = mon_h * 0.40
-        pcx, pcy = cx, mon_y + mon_h / 2
-
-        # під час обробки фото power-символ ОБЕРТАЄТЬСЯ — явний рух навіть на 16px
-        p.save()
-        if self.state == TrayState.PROCESSING_PHOTO:
-            p.translate(pcx, pcy)
-            p.rotate(self.rig.ring_angle)
-            p.translate(-pcx, -pcy)
-        prect = QRectF(pcx - pr, pcy - pr, 2 * pr, 2 * pr)
-        p.drawArc(prect, 110 * 16, 320 * 16)
-        p.drawLine(QPointF(pcx, pcy - pr * 1.15), QPointF(pcx, pcy + pr * 0.15))
-        p.restore()
+        pwr_alpha = 1.0 - rig.scan
+        if pwr_alpha > 0.05:
+            pc_col = QColor(pwr_color)
+            pc_col.setAlphaF(max(0.0, min(1.0, pwr_alpha)))
+            pwr_pen = QPen(pc_col)
+            pwr_pen.setWidthF(s * 0.075)
+            pwr_pen.setCapStyle(Qt.RoundCap)
+            p.setPen(pwr_pen)
+            pr = mon_h * 0.40
+            pcx, pcy = cx, mon_y + mon_h / 2
+            prect = QRectF(pcx - pr, pcy - pr, 2 * pr, 2 * pr)
+            p.drawArc(prect, 110 * 16, 320 * 16)
+            p.drawLine(QPointF(pcx, pcy - pr * 1.15), QPointF(pcx, pcy + pr * 0.15))
+        self._draw_photo_carousel(p, screen, pwr_color, rig.scan,
+                                  max(1.0, s * 0.045))
 
         # --- лінія сканування (обробка фото) ---
         if rig.scan > 0.02:

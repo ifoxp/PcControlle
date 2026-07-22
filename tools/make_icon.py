@@ -37,7 +37,10 @@ def main() -> int:
     for _ in range(60):
         eng.tick(0.05)
 
-    sizes = [16, 24, 32, 48, 64, 128, 256]
+    # Повний набір розмірів для Windows 10/11 (Microsoft: мінімум 16/24/32/48/256;
+    # 20/40 — таскбар при 125% масштабу, 30/36 генерує сам Windows з 256-шару).
+    # Кожен розмір рендеримо ОКРЕМО (вектором), а не масштабуємо — максимум різкості.
+    sizes = [16, 20, 24, 32, 40, 48, 64, 128, 256]
     pixmaps = {s: eng.render(s) for s in sizes}
 
     # PNG 256
@@ -50,7 +53,8 @@ def main() -> int:
         print("Pillow не встановлено — .ico не створено. pip install pillow")
         return 1
 
-    images = []
+    from io import BytesIO
+    images = {}
     for s in sizes:
         qpix = pixmaps[s]
         ba = QByteArray()
@@ -58,16 +62,22 @@ def main() -> int:
         buf.open(QBuffer.WriteOnly)
         qpix.save(buf, "PNG")
         buf.close()
-        from io import BytesIO
-        images.append(Image.open(BytesIO(bytes(ba))).convert("RGBA"))
+        images[s] = Image.open(BytesIO(bytes(ba))).convert("RGBA")
 
-    images[0].save(
+    # ВАЖЛИВО (Pillow): базовим МУСИТЬ бути НАЙБІЛЬШИЙ кадр. Раніше базовим був
+    # 16px — Pillow відкидає розміри, більші за базовий, тож у .ico лишався ЛИШЕ
+    # 16x16 і Windows розтягував його (піксельна іконка в таскбарі).
+    base = images[max(sizes)]
+    base.save(
         str(assets / "icon.ico"),
         format="ICO",
         sizes=[(s, s) for s in sizes],
-        append_images=images[1:],
+        append_images=[images[s] for s in sorted(sizes) if s != max(sizes)],
     )
+    # контроль: перечитуємо і показуємо, які розміри реально в файлі
+    check = Image.open(assets / "icon.ico")
     print(f"Створено {assets / 'icon.ico'} і {assets / 'icon.png'}")
+    print("Розміри в .ico:", sorted(check.info.get("sizes", set())))
     return 0
 
 
