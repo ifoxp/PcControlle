@@ -147,6 +147,26 @@ class TrayApp:
         self.app.quit()
 
 
+def _load_bundled_font() -> None:
+    """Реєструє Plus Jakarta Sans з .ttf у assets/fonts/. Шукає у _MEIPASS (frozen)
+    та в дереві коду (dev). Немає файлу → тихо лишається fallback (Segoe UI)."""
+    try:
+        from pathlib import Path
+        from PySide6.QtGui import QFontDatabase
+        candidates = []
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            candidates.append(Path(meipass) / "pc_control" / "assets" / "fonts")
+        candidates.append(Path(__file__).resolve().parent.parent / "assets" / "fonts")
+        for fonts_dir in candidates:
+            if fonts_dir.is_dir():
+                for f in fonts_dir.glob("*.ttf"):
+                    QFontDatabase.addApplicationFont(str(f))
+                break
+    except Exception:
+        pass
+
+
 def run_app(start_services) -> int:
     """
     Створює QApplication, запускає сервіси й входить у цикл подій.
@@ -154,10 +174,26 @@ def run_app(start_services) -> int:
     start_services — callable без аргументів, що стартує фонові сервіси
     (передається з main, щоб уникнути циклічних імпортів).
     """
+    # High-DPI: щоб інтерфейс не був «мильним» на 4K/масштабованих моніторах
+    # (вимога промту). Виставляємо ДО створення QApplication.
+    try:
+        import ctypes
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)  # PROCESS_SYSTEM_DPI_AWARE
+    except Exception:
+        pass
+    try:
+        from PySide6.QtCore import Qt as _Qt
+        QApplication.setHighDpiScaleFactorRoundingPolicy(
+            _Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+    except Exception:
+        pass
+
     app = QApplication(sys.argv)
     app.setApplicationName("PC Control")
     app.setQuitOnLastWindowClosed(False)  # закриття вікна не вбиває застосунок
     app.setStyleSheet(theme.stylesheet())
+    # завантажити Plus Jakarta Sans, якщо є поруч (інакше fallback Segoe UI)
+    _load_bundled_font()
 
     if not QSystemTrayIcon.isSystemTrayAvailable():
         logger.warning("Системний трей недоступний — показую дашборд напряму.")

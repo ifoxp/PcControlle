@@ -245,7 +245,10 @@ class PairingPanel(QWidget):
         cl.addWidget(manual)
 
         # кнопка «Копіювати код» — повний JSON у буфер (вставити в додаток)
-        copy_btn = QPushButton("📋 Копіювати код")
+        from PySide6.QtGui import QIcon
+        from . import theme, ui_icons
+        copy_btn = QPushButton("  Копіювати код")
+        copy_btn.setIcon(QIcon(ui_icons.copy(14, theme.MUTED)))
         copy_btn.clicked.connect(lambda: self._copy_code(copy_text, copy_btn))
         cl.addWidget(copy_btn, alignment=Qt.AlignCenter)
 
@@ -297,10 +300,17 @@ class PairingPanel(QWidget):
     def _copy_code(self, text: str, btn) -> None:
         """Копіює JSON-код парування в буфер обміну."""
         from PySide6.QtWidgets import QApplication
+        from PySide6.QtGui import QIcon
+        from . import theme, ui_icons
         QApplication.clipboard().setText(text)
-        btn.setText("✅ Скопійовано")
+        btn.setText("  Скопійовано")
+        btn.setIcon(QIcon(ui_icons.check(14, theme.ACCENT)))
         from PySide6.QtCore import QTimer
-        QTimer.singleShot(1500, lambda: btn.setText("📋 Копіювати код"))
+
+        def _restore():
+            btn.setText("  Копіювати код")
+            btn.setIcon(QIcon(ui_icons.copy(14, theme.MUTED)))
+        QTimer.singleShot(1500, _restore)
 
     def _on_toggle_hidden(self, device_id: str, hidden: bool) -> None:
         if device_id and devices.set_device_hidden(device_id, hidden):

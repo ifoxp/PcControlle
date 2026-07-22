@@ -166,7 +166,13 @@
       "Bash(Select-Object Name, PSIsContainer)",
       "Bash(Format-Table -AutoSize)",
       "Bash(ls -la \"E:\\\\Programing\\\\Phyton\\\\offPC\\\\\" | head -50)",
-      "Read(//e/Programing/Phyton/**)"
+      "Read(//e/Programing/Phyton/**)",
+      "PowerShell(& \"E:\\\\Programing\\\\Phyton\\\\offPC\\\\build.ps1\" exe 2>&1)",
+      "PowerShell(& \"E:\\\\Programing\\\\Phyton\\\\offPC\\\\.venv\\\\Scripts\\\\python.exe\" -c \"from PySide6.QtGui import QGuiApplication, QFontDatabase; app=QGuiApplication\\([]\\); fams=QFontDatabase.families\\(\\); print\\('Plus Jakarta Sans:', 'Plus Jakarta Sans' in fams\\); print\\('Segoe UI:', 'Segoe UI' in fams\\)\" 2>&1)",
+      "Bash(cd \"e:/Programing/Phyton/offPC\" && rm -f _redesign_*.png _final_*.png _redesign_check.png && echo \"cleaned temp renders\")"
+    ],
+    "additionalDirectories": [
+      "E:\\Programing\\Phyton\\offPC"
     ]
   }
 }

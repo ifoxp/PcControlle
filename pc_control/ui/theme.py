@@ -1,34 +1,43 @@
 """
-Темна тема дашборду (Dark Mode / OLED) — палітра з дизайн-системи UI/UX Pro Max.
+Темна тема дашборду (Dark Mode, neutral-графіт) — редизайн за UI/UX-промтом.
 
-  Background  #020617   Surface     #0F172A   Surface-2   #1E293B
-  Foreground  #F8FAFC   Muted       #94A3B8   Border      #334155
+  Background  #141414   Surface     #1E1E1E   Surface-2   #2B2B2B   Surface-3 #363636
+  Foreground  #FFFFFF   Muted       #B3B3B3   Muted-2  #7A7A7A     Border    #3A3A3A
   Accent      #22C55E (positive)   Warning #F59E0B   Danger #EF4444   Info #38BDF8
-Шрифт: Inter (fallback — Segoe UI).
+Шрифт: Onest (bundled, з кирилицею; fallback — Segoe UI).
+
+Дизайн-принципи (CLAUDE.md → UI/UX Expert Skill):
+  * Bento Grid — ізольовані картки з відступами;
+  * контраст: заголовки #FFFFFF, другорядний #B3B3B3 (ніколи тьмяний на темному);
+  * векторні іконки (QPainter), без емодзі/псевдографіки;
+  * hover/pressed/focus стани для всього інтерактивного;
+  * система відступів 4/8/12/16/24px.
 """
 
 from __future__ import annotations
 
 # --- Кольорові токени (єдине джерело правди для всього UI) ---
-BG = "#020617"
-BG_2 = "#0A1120"
-SURFACE = "#0F172A"
-SURFACE_2 = "#1E293B"
-SURFACE_3 = "#273449"
-FG = "#F8FAFC"
-MUTED = "#94A3B8"
-MUTED_2 = "#64748B"
-BORDER = "#334155"
-BORDER_SOFT = "#1E2A3F"
+# Нейтральна графітова гама (промт: фон #1A1A1A, картки #2B2B2B). Трохи глибший
+# фон + послідовні рівні поверхонь дають чіткий Bento-контраст карток над фоном.
+BG = "#141414"            # основний фон вікна
+BG_2 = "#101010"          # поля вводу / лог (найтемніше)
+SURFACE = "#1E1E1E"       # картки
+SURFACE_2 = "#2B2B2B"     # кнопки / вкладені елементи
+SURFACE_3 = "#363636"     # hover-стан
+FG = "#FFFFFF"            # заголовки / основний текст
+MUTED = "#B3B3B3"         # другорядний текст
+MUTED_2 = "#7A7A7A"       # підписи / метадані
+BORDER = "#3A3A3A"        # видима рамка
+BORDER_SOFT = "#2A2A2A"   # м'яка рамка карток
 
 ACCENT = "#22C55E"        # позитив / активно
 ACCENT_DIM = "#16A34A"
 WARNING = "#F59E0B"       # очікування
 DANGER = "#EF4444"        # помилка
 INFO = "#38BDF8"          # працює зараз
-STOPPED = "#64748B"       # вимкнено
+STOPPED = "#7A7A7A"       # вимкнено
 
-FONT_FAMILY = "Inter, 'Segoe UI', system-ui, sans-serif"
+FONT_FAMILY = "'Onest', 'Segoe UI', system-ui, sans-serif"
 
 # Колір індикатора стану за станом сервісу
 STATE_COLORS = {
@@ -75,6 +84,27 @@ def rgba(hex_color: str, alpha: float) -> str:
     return f"rgba({r}, {g}, {b}, {alpha:.2f})"
 
 
+def _check_svg() -> str:
+    """Дата-URI білої галочки (вектор) для QCheckBox::indicator:checked — щоб
+    чекбокс не був глухим зафарбованим квадратом (вимога промту)."""
+    import base64
+    svg = ("<svg xmlns='http://www.w3.org/2000/svg' width='18' height='18' "
+           "viewBox='0 0 18 18'><path d='M4 9.5 L7.5 13 L14 5' fill='none' "
+           "stroke='#0b0f0a' stroke-width='2.2' stroke-linecap='round' "
+           "stroke-linejoin='round'/></svg>")
+    b64 = base64.b64encode(svg.encode()).decode()
+    return f"data:image/svg+xml;base64,{b64}"
+
+
+def _radio_dot_svg() -> str:
+    """Дата-URI білої крапки для QRadioButton::indicator:checked (коло з крапкою)."""
+    import base64
+    svg = ("<svg xmlns='http://www.w3.org/2000/svg' width='18' height='18' "
+           "viewBox='0 0 18 18'><circle cx='9' cy='9' r='4' fill='#0b0f0a'/></svg>")
+    b64 = base64.b64encode(svg.encode()).decode()
+    return f"data:image/svg+xml;base64,{b64}"
+
+
 def stylesheet() -> str:
     """Глобальний QSS для всього застосунку."""
     return f"""
@@ -86,6 +116,22 @@ def stylesheet() -> str:
     QWidget#root {{
         background-color: {BG};
     }}
+    /* Кореневий контейнер frameless-вікна: скруглені кути + рамка */
+    QWidget#windowRoot {{
+        background-color: {BG};
+        border: 1px solid {BORDER};
+        border-radius: 12px;
+    }}
+
+    /* --- Кастомний TitleBar (frameless) --- */
+    QWidget#titleBar {{ background: transparent; }}
+    QLabel#titleBarText {{ font-size: 13px; font-weight: 700; color: {FG}; }}
+    QPushButton#winBtn {{
+        background: transparent; border: none; border-radius: 8px;
+        padding: 0; min-width: 34px; max-width: 34px; min-height: 30px; max-height: 30px;
+    }}
+    QPushButton#winBtn:hover {{ background: {SURFACE_2}; }}
+    QPushButton#winClose:hover {{ background: {DANGER}; }}
 
     /* --- Шапка --- */
     QLabel#appTitle {{ font-size: 22px; font-weight: 800; color: {FG}; }}
@@ -147,9 +193,10 @@ def stylesheet() -> str:
     }}
     QPushButton:hover {{ background-color: {SURFACE_3}; border-color: {MUTED_2}; }}
     QPushButton:pressed {{ background-color: {SURFACE}; }}
+    QPushButton:focus {{ border: 1px solid {ACCENT}; }}
     QPushButton:disabled {{ color: {MUTED_2}; background-color: {SURFACE}; border-color: {BORDER_SOFT}; }}
     QPushButton#primary {{
-        background-color: {ACCENT}; border: none; color: #052e16; font-weight: 700;
+        background-color: {ACCENT}; border: none; color: #062e16; font-weight: 700;
     }}
     QPushButton#primary:hover {{ background-color: {ACCENT_DIM}; }}
     QPushButton#primary:disabled {{ background-color: {SURFACE_2}; color: {MUTED}; }}
@@ -157,6 +204,13 @@ def stylesheet() -> str:
         background: transparent; border: 1px solid {BORDER}; color: {MUTED};
     }}
     QPushButton#ghost:hover {{ color: {FG}; border-color: {MUTED}; }}
+    QPushButton#ghost:checked {{ color: {FG}; border-color: {ACCENT}; background: {rgba(ACCENT, 0.14)}; }}
+    /* Небезпечні дії (видалити/відкликати) — семантичний червоний */
+    QPushButton#danger {{
+        background: transparent; border: 1px solid {rgba(DANGER, 0.5)}; color: {DANGER}; font-weight: 700;
+    }}
+    QPushButton#danger:hover {{ background: {DANGER}; color: #FFFFFF; border-color: {DANGER}; }}
+    QPushButton#danger:pressed {{ background: #B91C1C; }}
 
     /* --- Поля вводу (налаштування) --- */
     QLineEdit, QSpinBox, QComboBox {{
@@ -203,12 +257,28 @@ def stylesheet() -> str:
         font-size: 11px;
     }}
 
+    /* Чекбокс: квадрат із ВЕКТОРНОЮ галочкою (не глухий зафарбований квадрат) */
     QCheckBox {{ font-size: 13px; color: {FG}; spacing: 9px; }}
     QCheckBox::indicator {{
         width: 18px; height: 18px; border: 1px solid {BORDER};
         border-radius: 6px; background: {SURFACE_2};
     }}
-    QCheckBox::indicator:checked {{ background: {ACCENT}; border-color: {ACCENT}; }}
+    QCheckBox::indicator:hover {{ border-color: {MUTED_2}; }}
+    QCheckBox::indicator:checked {{
+        background: {ACCENT}; border-color: {ACCENT};
+        image: url({_check_svg()});
+    }}
+    /* Радіо: коло з крапкою всередині (не квадрат) */
+    QRadioButton {{ font-size: 13px; color: {FG}; spacing: 9px; }}
+    QRadioButton::indicator {{
+        width: 18px; height: 18px; border: 1px solid {BORDER};
+        border-radius: 9px; background: {SURFACE_2};
+    }}
+    QRadioButton::indicator:hover {{ border-color: {MUTED_2}; }}
+    QRadioButton::indicator:checked {{
+        background: {ACCENT}; border-color: {ACCENT};
+        image: url({_radio_dot_svg()});
+    }}
 
     QScrollArea {{ background: transparent; border: none; }}
     QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}

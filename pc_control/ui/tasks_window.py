@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
 from ..core import paths
 from ..services import tasks_store as ts
 from . import task_icons, theme
+from .frameless import FramelessWindow
 from .icon import app_icon
 
 
@@ -573,11 +574,9 @@ class NewTaskForm(QFrame):
 # ---------------------------------------------------------------------------
 # Головне вікно задач
 # ---------------------------------------------------------------------------
-class TasksWindow(QWidget):
+class TasksWindow(FramelessWindow):
     def __init__(self):
-        super().__init__()
-        self.setObjectName("root")
-        self.setWindowTitle("PC Control — Задачі")
+        super().__init__(title="Задачі", icon_pix=app_icon().pixmap(22, 22))
         self.setWindowIcon(app_icon())
         self.setStyleSheet(theme.stylesheet())
         self._apply_adaptive_size()
@@ -597,19 +596,15 @@ class TasksWindow(QWidget):
         self.resize(WANT_W, WANT_H)
 
     def _build(self):
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(22, 20, 22, 18)
-        outer.setSpacing(14)
+        # frameless: вміст у self.body (titlebar уже є)
+        outer = self.body
 
-        # шапка
+        # шапка (без логотипа — він у TitleBar)
         head = QHBoxLayout()
-        logo = QLabel()
-        logo.setPixmap(app_icon().pixmap(40, 40))
-        head.addWidget(logo)
         tb = QVBoxLayout(); tb.setSpacing(0)
         t = QLabel("Задачі")
         t.setObjectName("appTitle")
-        sub = QLabel("Ваші задачі зберігаються в Документах і не видаляються")
+        sub = QLabel("Зберігаються в Документах і не видаляються")
         sub.setObjectName("appSubtitle")
         tb.addWidget(t); tb.addWidget(sub)
         head.addLayout(tb)

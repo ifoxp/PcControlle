@@ -29,8 +29,9 @@ from ..core import paths
 from ..core.config import CONFIG
 from ..core.status import REGISTRY
 from ..services import sorter
-from . import theme
+from . import theme, ui_icons
 from .icon import app_icon
+from .frameless import FramelessWindow
 from .service_icons import service_avatar
 from .pairing_panel import PairingPanel
 from .settings_panel import SettingsPanel
@@ -153,7 +154,7 @@ class ServiceCard(QFrame):
         self.meta.setVisible(bool(meta_parts))
 
 
-class Dashboard(QWidget):
+class Dashboard(FramelessWindow):
     # повний порядок; фактичний набір фільтрується за увімкненими функціями
     _ALL_SERVICES = ["sorter", "volume", "autoshutdown", "api"]
     # ключ картки сервісу → ключ функції (api завжди присутній)
@@ -167,11 +168,9 @@ class Dashboard(QWidget):
                 or CONFIG.feature_enabled(self._SVC_FEATURE[k])]
 
     def __init__(self, on_demo=None, on_tasks=None):
-        super().__init__()
+        super().__init__(title="PC Control", icon_pix=app_icon().pixmap(22, 22))
         self._on_demo = on_demo
         self._on_tasks = on_tasks
-        self.setObjectName("root")
-        self.setWindowTitle("PC Control")
         self.setWindowIcon(app_icon())
         self.setStyleSheet(theme.stylesheet())
         self._apply_adaptive_size()
@@ -198,27 +197,22 @@ class Dashboard(QWidget):
             max_h, max_w = WANT_H, WANT_W
         w = min(WANT_W, max_w)
         h = min(WANT_H, max_h)
-        self.setMinimumSize(460, 540)
-        self.setMaximumHeight(max_h)
+        self.setMinimumSize(480, 560)
         self.resize(w, h)
 
     # ------------------------------------------------------------------ UI
     def _build(self) -> None:
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(22, 20, 22, 18)
-        outer.setSpacing(16)
+        # frameless: вміст кладемо в self.body (titlebar уже є). Верхня рядок —
+        # заголовок секції + кнопка «Задачі» (логотип/назва вже у TitleBar).
+        outer = self.body
 
-        # шапка
         head = QHBoxLayout()
         head.setSpacing(12)
-        logo = QLabel()
-        logo.setPixmap(app_icon().pixmap(46, 46))
-        head.addWidget(logo)
         tb = QVBoxLayout()
         tb.setSpacing(0)
-        t = QLabel("PC Control")
+        t = QLabel("Панель керування")
         t.setObjectName("appTitle")
-        sub = QLabel("Панель керування фоновими сервісами")
+        sub = QLabel("Фонові сервіси та налаштування")
         sub.setObjectName("appSubtitle")
         tb.addWidget(t)
         tb.addWidget(sub)
@@ -307,8 +301,10 @@ class Dashboard(QWidget):
         if CONFIG.feature_enabled("sorter"):
             actions = QHBoxLayout()
             actions.setSpacing(10)
-            self.btn_run = QPushButton("▶   Запустити аналіз фото")
+            from PySide6.QtGui import QIcon
+            self.btn_run = QPushButton("  Запустити аналіз фото")
             self.btn_run.setObjectName("primary")
+            self.btn_run.setIcon(QIcon(ui_icons.play(14, "#062e16")))
             self.btn_run.clicked.connect(self._run_sorter)
             actions.addWidget(self.btn_run)
             self.chk_today = QCheckBox("Включати сьогоднішні фото")
@@ -429,14 +425,14 @@ class Dashboard(QWidget):
         if self._worker and self._worker.isRunning():
             return
         self.btn_run.setEnabled(False)
-        self.btn_run.setText("⏳   Аналізую...")
+        self.btn_run.setText("  Аналізую…")
         self._worker = _SorterWorker()
         self._worker.done.connect(self._on_sorter_done)
         self._worker.start()
 
     def _on_sorter_done(self, result: tuple) -> None:
         self.btn_run.setEnabled(True)
-        self.btn_run.setText("▶   Запустити аналіз фото")
+        self.btn_run.setText("  Запустити аналіз фото")
         self._refresh()
 
     def showEvent(self, event) -> None:
