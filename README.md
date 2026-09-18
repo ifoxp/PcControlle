@@ -1,191 +1,101 @@
+**English** · [Українська](README.uk.md)
+
 # PC Control
 
-Домашній сервер керування ПК на Windows: HTTP-API для дистанційного керування
-з телефона + фонові сервіси (сортувальник фото, розумна гучність, авто-вимкнення)
-+ іконка в треї з панеллю керування.
+Control a Windows PC from your phone. An HTTP API plus background services,
+wrapped in a tray icon with a real dashboard — and a separate Android app that
+builds its own interface from whatever the PC says it can do.
 
-## Структура
+## The idea worth explaining
 
-```
-main.py                     ← точка входу (тонка обгортка)
-pc_control/
-├─ app.py                   ← оркестратор: вмикає сервіси та UI
-├─ __main__.py              ← запуск через `python -m pc_control`
-├─ core/                    ← спільне ядро
-│  ├─ paths.py              ← усі шляхи в одному місці
-│  ├─ config.py             ← конфіг із .env + config.json, генерація токена
-│  ├─ logging_setup.py      ← логування
-│  ├─ security.py           ← авторизація токена, валідація URL, rate-limit
-│  └─ status.py             ← реєстр стану сервісів (для UI)
-├─ services/                ← фонові сервіси
-│  ├─ auto_shutdown.py      ← перевірка присутності після ввімкнення (вимкнути, якщо нікого немає)
-│  ├─ volume_manager.py     ← прив'язка гучності застосунків до Master
-│  ├─ sorter.py             ← сортувальник фото/відео (Ollama)
-│  ├─ sorter_state.py       ← персист стану сортувальника (для UI)
-│  ├─ sorter_prompts.py     ← промпти моделі
-│  └─ tasks_store.py        ← задачі: модель, історія, архів, вкладення (Документи)
-├─ api/
-│  └─ server.py             ← Flask-ендпоінти
-└─ ui/                      ← PySide6
-   ├─ tray.py               ← трей-іконка + меню + життєвий цикл
-   ├─ dashboard.py          ← вікно-панель (статус, дії, лог)
-   ├─ theme.py              ← темна тема (QSS) на основі дизайн-системи
-   └─ icon.py               ← іконка застосунку
-mobile_app/                 ← мобільний пульт на Flet (Android) — окремий проєкт
-```
+The phone hardcodes nothing.
 
-## Мобільний додаток (пульт на Android)
+On connect it fetches `GET /manifest`, compares `MANIFEST_VERSION`, and redraws
+its grid. Every command is a dict on the server with an `id`, a title, an icon,
+an HTTP method and path — and a `widget` naming one of about twenty interaction
+primitives the app knows how to render: button, toggle, slider with a value
+getter, media view, text input, picker, touchpad, screen stream, process list,
+power menu, file browser, log view.
 
-У `mobile_app/` — окремий Flet-застосунок «пульт ПК»: сітка команд 4-в-ширину,
-що **будується динамічно з `/manifest`**. Нова команда на ПК → «Оновити» в додатку →
-нова плитка (додаток не треба перевидавати). Підключення — за QR (host+PIN+
-fingerprint), захист — TLS-pinning + per-device Bearer-токен. Деталі й збірка APK —
-у [mobile_app/README.md](mobile_app/README.md).
+So adding a new capability to the PC is **one dict entry**. No new APK, no store
+release, nothing to install on the phone.
 
-## Запуск
+The manifest is also filtered per machine: the server computes what this
+particular host can actually do and drops the rest. One monitor means no
+"Monitors" tile; hibernate disabled means no hibernate button. The phone never
+shows a control that would fail.
 
-```powershell
-# 1. Встановити залежності
-python -m pip install -r requirements.txt
+## Security
 
-# 2. Запустити
+The port is exposed to the internet, so the protection is layered.
+
+**TLS with fingerprint pinning.** A self-signed certificate is generated once.
+The phone trusts it by SHA-256 fingerprint, delivered inside the pairing QR
+code — which is stronger than a public CA here, because a compromised CA cannot
+impersonate a certificate the client pins directly.
+
+**Per-device bearer tokens.** Pairing takes a PIN exactly once and issues a
+token unique to that phone. `devices.json` stores only the SHA-256 hash, so the
+file is worthless if taken, and any single device can be revoked without
+touching the others.
+
+**Brute-force bans with escalation**, per-IP rate limits on every endpoint, and
+optional replay protection using a nonce and timestamp.
+
+One practical detail: streaming endpoints get their own, much higher rate-limit
+bucket. The general limit was dropping touchpad mouse-move packets and causing
+visible lag — the right fix was a separate bucket, not a weaker limit
+everywhere.
+
+## Background services
+
+**Photo sorter.** Uses a local Ollama vision model to classify what lands in
+your camera folder, moves screenshots and short clips to trash, and syncs the
+rest. Runs offline, on your own machine.
+
+**Per-app volume.** Every application is tied to the master volume by a saved
+offset. The interesting part is telling a deliberate change from an artefact:
+the Windows mixer sometimes shifts a level on its own. A new offset is stored
+only when the change is confirmed — either a drag, where the level moves the
+same direction for several ticks, or a jump of at least 8% that holds. An
+unconfirmed small jump is treated as noise and rolled back.
+
+**Presence-based auto-shutdown** and a task tracker round it out.
+
+## Running it
+
+```bash
+pip install -r requirements.txt
 python main.py
-#   або
-python -m pc_control
 ```
 
-Застосунок згорнеться в **іконку біля годинника**. Лівий клік або правий-клік →
-*Відкрити панель* показує дашборд. Хрестик ховає вікно назад у трей; *Вихід* у меню
-завершує роботу.
+The API token is generated on first run and stored in `.env`, which is not
+committed. `config.json` holds the non-secret switches — port, thresholds,
+sorter options.
 
-### Панель керування
+## Endpoints
 
-Дві вкладки:
+| Endpoint | Purpose |
+|---|---|
+| `/` | health check, no token |
+| `/manifest` | what this machine can do |
+| `/pair` (POST) | exchange a PIN for a per-device token |
+| `/devices` | paired devices |
+| `/shutdown`, `/shutdown_timer?minutes=N` | power |
+| `/toggle_monitor` | switch between one and two monitors |
+| `/screenshot` | PNG of the main monitor |
+| `/volume?level=0-100`, `/volume_get` | volume |
+| `/sorter/run`, `/sorter/status` | photo sorter |
 
-**Огляд**
-- **Метрики** зверху: скільки сервісів активно, сумарно в сміття / залишено.
-- **Картки сервісів** з кольоровими іконками — стан (Готовий/Працює/Помилка),
-  опис поточної дії, для сортувальника — **коли востаннє працював аналіз** і результат.
-- **▶ Запустити аналіз фото** — ручний запуск (також у меню трею).
-- **Лог** наживо.
+All protected requests take `Authorization: Bearer <token>`.
 
-**Налаштування** (без правки `.env` вручну)
-- папки сортувальника (Camera / Сміття / Синхронізація) з вибором через діалог;
-- модель Ollama, URL, шлях до `ollama.exe`;
-- токен API та хост;
-- пороги (авто-вимкнення, ліміт VRAM).
+## Mobile app
 
-### Задачі
+A separate Flet application, built to an APK. Because it renders from the
+manifest, it rarely needs rebuilding — the PC side is where features are added.
 
-Окреме вікно (меню трея → «Задачі», або кнопка «Задачі» на панелі) для ведення
-задач. Дані зберігаються в **`Documents\PC Control Tasks\`** — окремо від .exe,
-щоб не загубились.
+---
 
-- **Створення:** назва (обов'язково) + опис / замовник / термін / статус (опційні).
-- **Список-акордеон:** клік по задачі розгортає її inline для перегляду й редагування.
-- **Історія:** при збереженні змін старі значення не затираються — лягають в історію
-  (кнопка «Історія»).
-- **Статуси** з кольоровими бейджами: Не розпочато, Проведено зустріч, Очікується фідбек,
-  Очікується матеріали, В роботі, На тестуванні, Виконано, Відкладено.
-- **Архів:** статус «Виконано» ховає задачу в архів (не видаляє). Перемикач «Показати архів».
-- **Вкладення:** перетягни файл на задачу → копія в `Documents\...\attachments\`,
-  відкриття одним кліком.
-- **Пошук + фільтр** за статусом, **підсвітка термінів** (червоним прострочені),
-  **«Копіювати»** — задача як текст у буфер.
-- Повна підтримка Ctrl+A/C/V/X у полях.
-
-### Анімована іконка трею («персонаж»)
-
-Іконка біля годинника плавно змінює вигляд залежно від того, що відбувається:
-
-| Стан | Анімація |
-|------|----------|
-| Спокій | рівне світіння екрана |
-| Очікування авто-вимкнення | кільце-таймер обертається навколо |
-| Запит із телефона | хвилі сигналу |
-| Обробка фото/відео | лінія сканування + обертове кільце |
-| Помилка | червоний пульс |
-
-Переходи між станами завжди плавні (інтерполяція, як риг персонажа).
-
-Перегенерувати іконку exe: `python tools/make_icon.py`.
-
-## Конфігурація
-
-| Файл | Що містить |
-|------|------------|
-| `.env` | **секрети та машинозалежні шляхи** (токен, папки фото, ollama.exe). Не комітиться. |
-| `config.json` | користувацькі перемикачі (include_today, порт, поріг авто-вимкнення). |
-
-Токен API генерується автоматично і зберігається в `.env` при першому запуску.
-
-## HTTPS-API
-
-Сервер піднімається на **HTTPS** (self-signed TLS; телефон довіряє через
-pinning fingerprint із QR-парування). Усі захищені запити вимагають
-**per-device токена** у заголовку `Authorization: Bearer <token>` (не `?token=`).
-Токен видається під час парування (`/pair` за PIN), окремий на кожен пристрій.
-
-| Ендпоінт | Призначення |
-|----------|-------------|
-| `/` | health-check (без токена) |
-| `/pair` (POST) | обмін PIN → per-device токен (парування нового телефона) |
-| `/devices` | список парованих пристроїв |
-| `/shutdown` | миттєве вимкнення |
-| `/shutdown_timer?minutes=N` | вимкнення через N хв (0 = скасувати) |
-| `/toggle_monitor` | перемикання 1↔2 монітори |
-| `/screenshot` | PNG головного монітора |
-| `/open_url?url=...` | відкрити URL (тільки http/https) |
-| `/hotkey?action=alt_tab\|alt_f4\|task_manager` | гарячі клавіші |
-| `/volume?level=0-100` / `/volume_get` | гучність |
-| `/sorter/run` / `/sorter/status` | запуск/стан сортувальника |
-
-## Логіка керування гучністю
-
-Кожен застосунок «прив'язаний» до Master через збережений **offset** (різницю).
-За замовчуванням прив'язка **жорстка**: app завжди підтягується до `Master + offset`.
-
-Щоб не плутати свідому зміну користувача з артефактами (мікшер Windows інколи
-сам зсуває гучність → раніше з'являлось «46 при 50»), новий offset зберігається
-**тільки якщо зміна підтверджена** одним зі способів:
-- **drag** — користувач тягне повзунок: гучність повзе в один бік кілька тіків поспіль;
-- **великий тиць** — миттєвий стрибок ≥ 8% (`JUMP_MIN`), що втримався (`HOLD_TICKS`).
-
-Дрібний стрибок, що не підтвердився за вікно спостереження (`WATCH_TICKS`) —
-вважається артефактом і **відкочується** назад до `Master + offset`.
-
-Параметри детектора — на початку [pc_control/services/volume_manager.py](pc_control/services/volume_manager.py).
-
-## Безпека
-
-Порт стирчить в інтернет (білий IP + проброс), тож захист багаторівневий:
-
-- **HTTPS (TLS)** — self-signed сертифікат, генерується раз (`cert.pem`/`key.pem`).
-  Мобільний клієнт довіряє через **pinning fingerprint** (у QR-парування) — MITM
-  неможливий навіть без публічного CA.
-- **Парування пристрою + per-device Bearer-токен** — PIN потрібен лише раз, далі
-  кожен телефон має власний токен (у `devices.json` лише SHA-256 хеш). Будь-який
-  пристрій можна **відкликати окремо**.
-- **Brute-force бан IP** — N невдач авторизації → тимчасовий бан з ескалацією часу.
-- **Per-IP rate-limit** на всі ендпоінти.
-- **Replay-захист** (опційно, `PC` `require_signature`) — nonce+timestamp проти
-  повтору перехопленого запиту.
-- **Аудит-лог безпеки** (`security_audit.log`) — усі спроби доступу/парування/бани.
-- **Анти-SSRF** у `/open_url` — лише `http`/`https` і не приватні діапазони.
-- Небезпечні дії (`/shutdown`, `/hotkey`, `/toggle_monitor`) позначені `dangerous`.
-- Для режиму «тільки цей ПК» постав `PC_API_HOST=127.0.0.1` у `.env`.
-
-## Збірка .exe
-
-```powershell
-python -m pip install pyinstaller
-pyinstaller "PC Control.spec"
-```
-`.exe` з'явиться в `dist/`. Поклади поруч `.env` і `config.json`.
-
-## Примітки
-
-- **Старий Gemini-ключ** із `.env` прибрано — раніше він був у файлі у відкритому
-  вигляді. Його варто **відкликати** в Google AI Studio.
-- **`.venv` у репозиторії зламаний** (вказує на неіснуючий `C:\Python312`).
-  Перестворити: `python -m venv .venv` і встановити `requirements.txt`.
+**Chekaliuk Dmytro** · [@ifoxp](https://github.com/ifoxp) ·
+[ifoxp.top](https://ifoxp.top) · Telegram [@ifoxp](https://t.me/ifoxp) ·
+Discord `ifoxp`
