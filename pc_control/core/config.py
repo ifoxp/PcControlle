@@ -94,12 +94,16 @@ class SorterConfig:
     )
 
     ollama_url: str = field(default_factory=lambda: _env("PC_OLLAMA_URL", "http://localhost:11434/api/generate"))
-    ollama_model: str = field(default_factory=lambda: _env("PC_OLLAMA_MODEL", "gemma4-vram-ram"))
+    ollama_model: str = field(default_factory=lambda: _env("PC_OLLAMA_MODEL", "qwen3.5:9b"))
     ollama_exe: str = field(
         default_factory=lambda: _env(
             "PC_OLLAMA_EXE", r"C:\Users\ifoxp\AppData\Local\Programs\Ollama\ollama.exe"
         )
     )
+
+    # «Думання» моделі (Qwen3.5 тощо): за замовч. вимкнено — у 3-7 разів
+    # швидше, а на сортуванні точність та сама або краща (перевірено на 21 файлі)
+    ollama_think: bool = False
 
     vram_limit_mb: int = 6500
     poll_interval: int = 60
@@ -213,6 +217,8 @@ class AppConfig:
             self.auto_shutdown_idle_minutes = int(user["auto_shutdown_idle_minutes"])
         if "vram_limit_mb" in user:
             self.sorter.vram_limit_mb = int(user["vram_limit_mb"])
+        if "ollama_think" in user:
+            self.sorter.ollama_think = bool(user["ollama_think"])
         # feature-флаги
         saved = user.get("features", {})
         for k in FEATURES:
@@ -299,6 +305,9 @@ class AppConfig:
         if "vram_limit_mb" in values:
             self.sorter.vram_limit_mb = int(values["vram_limit_mb"])
             self.set_user_value("vram_limit_mb", self.sorter.vram_limit_mb)
+        if "ollama_think" in values:
+            self.sorter.ollama_think = bool(values["ollama_think"])
+            self.set_user_value("ollama_think", self.sorter.ollama_think)
 
 
 # Єдиний інстанс конфігу на застосунок

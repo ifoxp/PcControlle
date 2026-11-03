@@ -2,7 +2,7 @@
 Панель налаштувань (вкладка «Налаштування»).
 
 Структура секцій — за функціями, а не «розкидано» (усе про сортувальник в
-ОДНІЙ секції: папки + модель Ollama + ліміт VRAM):
+ОДНІЙ секції: папки + модель Ollama + «думання» + ліміт VRAM):
   * Сортувальник фото/відео (папки, модель, ресурси) — якщо функцію увімкнено;
   * Авто-вимкнення (вікно присутності) — якщо функцію увімкнено;
   * Гучність застосунків — якщо функцію увімкнено;
@@ -273,6 +273,41 @@ class SettingsPanel(QWidget):
         self.f_exe = _Field("Шлях до ollama.exe", s.ollama_exe, browse=False)
         for f in (self.f_model, self.f_url, self.f_exe):
             g_sorter.add(f)
+        self.sw_think = ToggleSwitch("Режим «думання» моделі")
+        self.sw_think.set_checked(s.ollama_think)
+        g_sorter.add(self.sw_think)
+        think_hint = QLabel(
+            "Модель спершу міркує, потім відповідає. Повільніше в 3-7 разів, а для "
+            "сортування зазвичай не потрібно. Діє лише на моделях із підтримкою "
+            "думання (Qwen3.5 тощо), для інших ігнорується.")
+        think_hint.setObjectName("fieldHint")
+        think_hint.setWordWrap(True)
+        g_sorter.add(think_hint)
+
+        g_sorter.add_subsection("Промпти")
+        prompts_hint = QLabel(
+            "Інструкції для моделі — що вважати сміттям. Відкриваються в Блокноті; "
+            "після збереження діють з наступного файлу, перезапуск не потрібен.")
+        prompts_hint.setObjectName("fieldHint")
+        prompts_hint.setWordWrap(True)
+        g_sorter.add(prompts_hint)
+        prompts_row = QHBoxLayout()
+        prompts_row.setSpacing(8)
+        for label, kind in (("Промпт для фото", "image"), ("Промпт для відео", "video")):
+            b = QPushButton(label)
+            b.setObjectName("ghost")
+            b.clicked.connect(lambda _=False, k=kind: self._open_prompt(k))
+            prompts_row.addWidget(b)
+        b_reset = QPushButton("Скинути до стандартних")
+        b_reset.setObjectName("ghost")
+        b_reset.clicked.connect(self._reset_prompts)
+        prompts_row.addWidget(b_reset)
+        prompts_row.addStretch(1)
+        g_sorter.body.addLayout(prompts_row)
+        self._prompts_status = QLabel("")
+        self._prompts_status.setObjectName("fieldHint")
+        self._prompts_status.setWordWrap(True)
+        g_sorter.add(self._prompts_status)
 
         g_sorter.add_subsection("Ресурси")
         self.n_vram = _NumField("Ліміт VRAM для запуску аналізу", s.vram_limit_mb,
@@ -430,6 +465,33 @@ class SettingsPanel(QWidget):
         root.addLayout(actions)
         root.addStretch(1)
 
+    def _open_prompt(self, kind: str):
+        import os
+        from ..core import paths
+        from ..services import sorter_prompts
+        try:
+            sorter_prompts.ensure_files()
+            path = paths.PROMPT_IMAGE_FILE if kind == "image" else paths.PROMPT_VIDEO_FILE
+            os.startfile(str(path))  # noqa: S606 (Windows-only, довірений шлях)
+            self._prompts_status.setText(f"Відкрито {path.name}. Збережи файл — і готово.")
+        except Exception as e:
+            self._prompts_status.setText(f"Не вдалося відкрити промпт: {e}")
+
+    def _reset_prompts(self):
+        from PySide6.QtWidgets import QMessageBox
+        from ..services import sorter_prompts
+        r = QMessageBox.question(
+            self, "PC Control",
+            "Перезаписати photo.txt і video.txt стандартними текстами?\n"
+            "Твої правки в промптах буде втрачено.")
+        if r != QMessageBox.Yes:
+            return
+        try:
+            sorter_prompts.reset()
+            self._prompts_status.setText("Промпти скинуто до стандартних.")
+        except Exception as e:
+            self._prompts_status.setText(f"Не вдалося скинути: {e}")
+
     def _set_tray_click(self, value: str):
         """Зберігає, що відкривати кліком по трей-іконці (застосовується одразу)."""
         CONFIG.tray_click_action = value
@@ -524,6 +586,7 @@ class SettingsPanel(QWidget):
             "ollama_model": self.f_model.value(),
             "ollama_url": self.f_url.value(),
             "ollama_exe": self.f_exe.value(),
+            "ollama_think": self.sw_think.is_checked(),
             "token": self.f_token.value(),
             "api_host": self.f_host.value(),
             "public_host": self.f_public_host.value(),

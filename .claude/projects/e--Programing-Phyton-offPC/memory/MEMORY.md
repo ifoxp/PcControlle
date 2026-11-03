@@ -4,3 +4,4 @@
 - [APK dynamic widgets plan](apk-dynamic-widgets-plan.md) — відкладена задача: universal-віджети щоб не перевидавати APK на нові команди
 - [Feature flags](feature-flags.md) — вмикання/вимикання функцій EXE + майстер першого запуску + очищення скріншотів
 - [UI redesign](ui-redesign.md) — редизайн десктоп-UI: frameless, Bento, шрифт Onest, векторні іконки, High-DPI
+- [Sorter model](sorter-model.md) — qwen3.5:9b, think-перемикач, кадри відео, Ollama ≥0.40, тест-набір з повернених файлів

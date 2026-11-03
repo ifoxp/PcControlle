@@ -21,7 +21,7 @@ metadata:
 
 Скріншоти більше НЕ пишуться на диск: `/screenshot` віддає з памʼяті (io.BytesIO+Response) — раніше кожен кадр стріму створював файл у dist\screenshots. Денний cleaner `_start_screenshots_cleaner` (app.py) лишився як підстраховка для старих файлів.
 
-Видалено як мертве (11.07.2026): папка `legacy/`, `sorter_config.json`, `gemma4-vram-ram.modelfile`, дублікат-заготовка brightness у commands.py.
+Видалено як мертве (11.07.2026): папка `legacy/`, `sorter_config.json`, дублікат-заготовка brightness у commands.py.
 
 **APK (мобільний)**: `mobile_app\build_apk.ps1` (3 кроки: flet build → patch_manifest → flutter build).
 Готовий APK: `mobile_app\build\flutter\build\app\outputs\flutter-apk\app-release.apk`.

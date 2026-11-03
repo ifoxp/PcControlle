@@ -18,6 +18,7 @@ from __future__ import annotations
 import base64
 import json
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -25,18 +26,19 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import cv2
+import numpy as np
 import requests
 
 from ..core import paths
 from ..core.config import CONFIG
 from ..core.logging_setup import get_logger
 from ..core.status import REGISTRY, SVC_SORTER, State
-from . import sorter_state
-from .sorter_prompts import PROMPT_IMAGE, PROMPT_VIDEO
+from . import sorter_prompts, sorter_state
 
 logger = get_logger("sorter")
 # окремий детальний лог у sorter_log.txt
@@ -51,6 +53,14 @@ if not _detail.handlers:
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".heic", ".webp"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".3gp", ".ts"}
+
+
+def _is_media(f: Path) -> bool:
+    """Фото/відео для аналізу. Файли з крапкою на початку — службові Android
+    (.pending-… ще дописується, .trashed-… уже видалений на телефоні), їх
+    приносить синхронізація; аналізувати їх не можна."""
+    return (f.is_file() and not f.name.startswith(".")
+            and f.suffix.lower() in (IMAGE_EXTENSIONS | VIDEO_EXTENSIONS))
 
 # Подія "зроби цикл негайно" — встановлюється з UI/API
 _run_now = threading.Event()
@@ -174,17 +184,36 @@ def _ollama_set_keep_alive(value: str) -> None:
         _detail.warning("keep_alive(%s) не вдалося: %s", value, e)
 
 
+# Жорстка схема відповіді: модель фізично не може повернути інші поля/типи.
+# reason ПЕРШИМ: модель спершу називає, що бачить, і лише потім вирішує —
+# інакше бувало «is_trash: false, reason: скріншот гри».
+_RESULT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "reason": {"type": "string"},
+        "is_trash": {"type": "boolean"},
+    },
+    "required": ["reason", "is_trash"],
+}
+
+
 def _ollama_request(prompt: str, images_b64: list[str] | None = None) -> str:
     payload = {
         "model": _cfg().ollama_model,
         "prompt": prompt,
         "stream": False,
-        "format": "json",
+        "format": _RESULT_SCHEMA,
+        "think": _cfg().ollama_think,
         "options": {"temperature": 0.1, "num_ctx": 16384},
     }
     if images_b64:
         payload["images"] = images_b64
-    response = requests.post(_cfg().ollama_url, json=payload, timeout=120)
+    # з «думанням» і 12 кадрами відео відповідь буває довгою
+    response = requests.post(_cfg().ollama_url, json=payload, timeout=300)
+    if response.status_code == 400 and "think" in response.text.lower():
+        # модель без підтримки думання — повторюємо без параметра
+        payload.pop("think")
+        response = requests.post(_cfg().ollama_url, json=payload, timeout=300)
     response.raise_for_status()
     return response.json()["response"].strip()
 
@@ -192,54 +221,96 @@ def _ollama_request(prompt: str, images_b64: list[str] | None = None) -> str:
 # ---------------------------------------------------------------------------
 # Кадри з відео
 # ---------------------------------------------------------------------------
-def _extract_video_frames_b64(video_path: Path) -> tuple[list[str], float]:
-    tmp_path = None
-    try:
-        tmp = tempfile.NamedTemporaryFile(suffix=video_path.suffix, delete=False)
-        tmp.close()
-        tmp_path = tmp.name
-        shutil.copy2(str(video_path), tmp_path)
-        cap = cv2.VideoCapture(tmp_path)
-    except Exception:
-        cap = cv2.VideoCapture(str(video_path))
+# Короткі ролики — кадр кожні ~3 с, але не менше 4 (раніше 10-секундне відео
+# отримувало 1 кадр); довгі — не більше 12, щоб влізти в контекст.
+VIDEO_SEC_PER_FRAME = 3.0
+VIDEO_MIN_FRAMES = 4
+VIDEO_MAX_FRAMES = 12
 
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    duration_sec = total_frames / fps if fps > 0 else 0
 
-    frames_per_minute = 5
-    MAX_FRAMES = 12
-    minutes = duration_sec / 60.0
-    if minutes <= 0:
-        num_frames = 1
-    else:
-        num_frames = max(1, min(math.ceil(minutes * frames_per_minute), MAX_FRAMES))
-
-    if num_frames == 1:
-        indices = [total_frames // 2]
-    else:
-        indices = [int(i * (total_frames - 1) / (num_frames - 1)) for i in range(num_frames)]
-
-    frames_b64: list[str] = []
-    for idx in indices:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-        ret, frame = cap.read()
-        if ret:
-            h, w = frame.shape[:2]
-            if max(h, w) > 768:
-                scale = 768 / max(h, w)
-                frame = cv2.resize(frame, (int(w * scale), int(h * scale)))
-            _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
-            frames_b64.append(base64.b64encode(buf.tobytes()).decode())
-
+def _open_video(video_path: Path) -> tuple[cv2.VideoCapture, Path | None]:
+    """Відкриває відео. OpenCV 5 читає кириличні шляхи напряму; якщо ні —
+    hardlink в ASCII-папку на тому ж диску (миттєво, без копії гігабайтів), і
+    лише в крайньому разі копія у TEMP. Повертає (cap, тимчасовий файл або None)."""
+    cap = cv2.VideoCapture(str(video_path))
+    if cap.isOpened():
+        return cap, None
     cap.release()
-    if tmp_path:
-        try:
-            Path(tmp_path).unlink()
-        except Exception:
-            pass
+    tmp_dir = Path(video_path.anchor) / ".pc_control_tmp"
+    tmp = tmp_dir / f"{uuid.uuid4().hex}{video_path.suffix}"
+    try:
+        tmp_dir.mkdir(exist_ok=True)
+        os.link(video_path, tmp)
+    except OSError:
+        fd, name = tempfile.mkstemp(suffix=video_path.suffix)
+        os.close(fd)
+        tmp = Path(name)
+        shutil.copy2(str(video_path), str(tmp))
+    return cv2.VideoCapture(str(tmp)), tmp
 
-    return frames_b64, duration_sec
+
+def _read_frame(cap: cv2.VideoCapture, idx: int):
+    """Кадр за індексом; якщо не читається (бувало в кінці відео) — трохи раніше."""
+    for back in (0, 5, 30):
+        cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, idx - back))
+        ok, frame = cap.read()
+        if ok:
+            return frame
+    return None
+
+
+def _extract_video_frames_b64(video_path: Path) -> tuple[list[str], list[float], float]:
+    """Повертає (кадри у base64, час кожного кадру в секундах, тривалість)."""
+    cap, tmp = _open_video(video_path)
+    frames_b64: list[str] = []
+    times: list[float] = []
+    try:
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if total_frames <= 0:
+            return [], [], 0.0
+        duration_sec = total_frames / fps
+
+        num_frames = math.ceil(duration_sec / VIDEO_SEC_PER_FRAME)
+        num_frames = max(VIDEO_MIN_FRAMES, min(num_frames, VIDEO_MAX_FRAMES))
+        num_frames = min(num_frames, total_frames)
+        # більше кадрів — менша роздільність кожного (вміщаємось у контекст)
+        side = 768 if num_frames <= 6 else 640
+
+        prev_thumb = None
+        for i in range(num_frames):
+            # центр i-го рівного відрізка: без самого першого кадру (камера ще
+            # фокусується) і самого останнього (OpenCV часто не може його прочитати)
+            idx = int((i + 0.5) * total_frames / num_frames)
+            frame = _read_frame(cap, idx)
+            if frame is None:
+                continue
+            # майже однаковий з попереднім (статична сцена) — не марнуємо токени
+            thumb = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (16, 16)).astype(np.int16)
+            if prev_thumb is not None and np.abs(thumb - prev_thumb).mean() < 2:
+                continue
+            prev_thumb = thumb
+
+            h, w = frame.shape[:2]
+            if max(h, w) > side:
+                scale = side / max(h, w)
+                frame = cv2.resize(frame, (int(w * scale), int(h * scale)))
+            _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            frames_b64.append(base64.b64encode(buf.tobytes()).decode())
+            times.append(idx / fps)
+    finally:
+        cap.release()
+        if tmp:
+            try:
+                tmp.unlink()
+            except Exception:
+                pass
+
+    return frames_b64, times, duration_sec
+
+
+def _fmt_time(sec: float) -> str:
+    return f"{int(sec // 60)}:{int(sec % 60):02d}"
 
 
 # ---------------------------------------------------------------------------
@@ -263,20 +334,22 @@ def _analyze_file(filepath: Path) -> dict | None:
     suffix = filepath.suffix.lower()
     try:
         if suffix in VIDEO_EXTENSIONS:
-            frames_b64, duration_sec = _extract_video_frames_b64(filepath)
+            frames_b64, times, duration_sec = _extract_video_frames_b64(filepath)
             if not frames_b64:
                 _detail.error("Не вдалося витягти кадри: %s", filepath.name)
                 return None
             minutes = int(duration_sec // 60)
-            secs = int(duration_sec % 60)
-            dur_str = f"{minutes}хв {secs}с" if minutes > 0 else f"{secs}с"
-            prompt = (PROMPT_VIDEO
+            secs = duration_sec % 60
+            dur_str = f"{minutes}хв {int(secs)}с" if minutes > 0 else f"{secs:.1f}с"
+            timeline = ", ".join(f"#{i} — {_fmt_time(t)}" for i, t in enumerate(times, 1))
+            _detail.debug("  Кадри (%s): %s", len(times), timeline)
+            prompt = (sorter_prompts.load("video")
                       .replace("{filename}", filepath.name)
                       .replace("{num_frames}", str(len(frames_b64)))
-                      .replace("{duration}", dur_str))
+                      .replace("{duration}", dur_str)
+                      .replace("{timeline}", timeline))
             images_b64 = frames_b64
         else:
-            import numpy as np
             raw = np.frombuffer(filepath.read_bytes(), dtype=np.uint8)
             img = cv2.imdecode(raw, cv2.IMREAD_COLOR)
             if img is None:
@@ -288,7 +361,7 @@ def _analyze_file(filepath: Path) -> dict | None:
                 img = cv2.resize(img, (int(w * scale), int(h * scale)))
             _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 75])
             img_b64 = base64.b64encode(buf.tobytes()).decode()
-            prompt = PROMPT_IMAGE.replace("{filename}", filepath.name)
+            prompt = sorter_prompts.load("image").replace("{filename}", filepath.name)
             images_b64 = [img_b64]
 
         if not images_b64:
@@ -312,11 +385,31 @@ def _analyze_file(filepath: Path) -> dict | None:
         return None
 
 
-def _move_to_trash(filepath: Path) -> None:
+def _move_to_trash(filepath: Path, synced: set | None = None) -> None:
     dest = _cfg().trash_dir / filepath.name
     if filepath.exists():
+        size = filepath.stat().st_size
         _cfg().trash_dir.mkdir(parents=True, exist_ok=True)
         shutil.move(str(filepath), str(dest))
+        _drop_sync_copy(filepath.name, size, synced)
+
+
+def _drop_sync_copy(name: str, size: int, synced: set | None) -> None:
+    """Файл пішов у сміття — прибираємо його копію з Синхронізації, щоб її не
+    забрав Pixel 5 (буває після повторного аналізу). Видаляємо лише нашу копію:
+    те саме ім'я і той самий розмір, що в оригіналу."""
+    if synced is None:
+        synced = _load_set(paths.SORTER_SYNCED)
+    if name in synced:
+        synced.discard(name)
+        _save_set(paths.SORTER_SYNCED, synced)
+    copy = _cfg().sync_dir / name
+    try:
+        if copy.is_file() and copy.stat().st_size == size:
+            copy.unlink()
+            _detail.info("  СИНК: %s прибрано з Синхронізації (пішов у сміття)", name)
+    except Exception as e:
+        _detail.warning("  Не вдалося прибрати копію %s із Синхронізації: %s", name, e)
 
 
 # ---------------------------------------------------------------------------
@@ -338,7 +431,7 @@ def startup_quick_scan() -> None:
     trashed = _load_set(paths.SORTER_TRASHED)
     moved = 0
     for f in camera_dir.iterdir():
-        if not f.is_file() or f.suffix.lower() not in (IMAGE_EXTENSIONS | VIDEO_EXTENSIONS):
+        if not _is_media(f):
             continue
         reason = _quick_trash_check(f)
         if reason:
@@ -376,13 +469,13 @@ def _sorter_tick() -> tuple[int, int, int]:
 
     # повернені зі сміття файли — копіюємо у Синхронізацію
     for f in camera_dir.iterdir():
-        if f.is_file() and f.name in trashed and f.name not in synced:
+        if _is_media(f) and f.name in trashed and f.name not in synced:
             _detail.info("  ПОВЕРНЕНО зі сміття: %s → Синхронізація", f.name)
             _copy_to_sync(f, synced)
 
     new_files: list[Path] = []
     for f in camera_dir.iterdir():
-        if not f.is_file() or f.suffix.lower() not in (IMAGE_EXTENSIONS | VIDEO_EXTENSIONS):
+        if not _is_media(f):
             continue
         if f.name in checked:
             continue
@@ -419,7 +512,7 @@ def _sorter_tick() -> tuple[int, int, int]:
             if reason:
                 _detail.info("  СМІТТЯ [авто]: %s | %s", filepath.name, reason)
                 try:
-                    _move_to_trash(filepath)
+                    _move_to_trash(filepath, synced)
                     checked.add(filepath.name); trashed.add(filepath.name)
                     _save_set(paths.SORTER_CHECKED, checked); _save_set(paths.SORTER_TRASHED, trashed)
                     n_trash += 1
@@ -447,7 +540,7 @@ def _sorter_tick() -> tuple[int, int, int]:
             if result["is_trash"]:
                 _detail.info("  СМІТТЯ: %s | %s", filepath.name, result["reason"])
                 try:
-                    _move_to_trash(filepath)
+                    _move_to_trash(filepath, synced)
                     checked.add(filepath.name); trashed.add(filepath.name)
                     _save_set(paths.SORTER_CHECKED, checked); _save_set(paths.SORTER_TRASHED, trashed)
                     n_trash += 1
@@ -518,6 +611,10 @@ def _run_loop() -> None:
 
 def start_background() -> threading.Thread:
     REGISTRY.register(SVC_SORTER, "Сортувальник фото/відео")
+    try:
+        sorter_prompts.ensure_files()  # щоб prompts/*.txt з'явились одразу
+    except Exception as e:
+        logger.warning("Не вдалося створити файли промптів: %s", e)
     t = threading.Thread(target=_run_loop, name="sorter", daemon=True)
     t.start()
     logger.info("sorter thread запущений.")

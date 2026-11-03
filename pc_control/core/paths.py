@@ -34,6 +34,11 @@ SORTER_TRASHED = BASE_DIR / "sorter_trashed.json"
 SORTER_SYNCED = BASE_DIR / "sorter_synced.json"
 SORTER_STATE = BASE_DIR / "sorter_state.json"  # last_run, лічильники для UI
 
+# Промпти сортувальника — звичайні .txt, користувач редагує без перезбірки exe
+PROMPTS_DIR = BASE_DIR / "prompts"
+PROMPT_IMAGE_FILE = PROMPTS_DIR / "photo.txt"
+PROMPT_VIDEO_FILE = PROMPTS_DIR / "video.txt"
+
 # Стан керування гучністю
 VOLUME_OFFSETS = BASE_DIR / "volume_offsets.json"
 
